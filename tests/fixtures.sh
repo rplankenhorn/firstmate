@@ -30,15 +30,6 @@ export FM_TEST_NO_MISTAKES_FAKE_VERSION="no-mistakes version v${FM_TEST_NO_MISTA
 export FM_TEST_NO_MISTAKES_FAKE_VERSION_TS="${FM_TEST_NO_MISTAKES_FAKE_VERSION} 2026-06-27T00:02:18Z"
 export FM_TEST_GH_AXI_VERSION=0.1.29
 
-# Every fake backend in this suite answers a pane capture with nothing, so
-# bin/fm-launch-send-lib.sh's readiness probe can only ever reach its
-# "no readable output" verdict here. Waiting out the production budget for each
-# faked spawn would cost minutes of suite time to learn that. Shorten it once,
-# centrally, so no individual test carries a copy of this knowledge; the tests
-# that exercise the readiness rule itself pass their own explicit budget.
-export FM_LAUNCH_READY_POLLS=2
-export FM_LAUNCH_READY_INTERVAL=0.05
-
 # --- fake no-mistakes -------------------------------------------------------
 
 # fm_test_fake_no_mistakes <fakebin>
@@ -103,14 +94,15 @@ fm_test_fake_gh_axi() {
 # fm_test_fake_tmux_spawn <fakebin>
 # Spawn-world tmux: pane_current_path from FM_FAKE_PANE_PATH, session named
 # firstmate, window ops succeed, send-keys succeed. When FM_FAKE_LAUNCH_LOG is
-# set, each send-keys -l payload is appended one per line. Optional
-# FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
+# set, send-keys is recorded by tests/fake-tmux-send-record.sh, which owns the
+# rule. Optional FM_FAKE_DUPLICATE_WINDOW is printed from list-windows.
 #
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
 # suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
+  fm_test_fake_pane_readiness_budget
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -127,15 +119,8 @@ case "${1:-}" in
     ;;
   has-session|new-session|new-window|kill-window|set-window-option) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
-    fi
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_record_send "$@"
     exit 0
     ;;
 esac

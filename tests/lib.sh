@@ -635,3 +635,27 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
+
+# tests/fake-tmux-send-record.sh owns how a fake tmux records send-keys; the
+# stubs are generated scripts, so they reach it through this path.
+FM_FAKE_SEND_RECORD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-tmux-send-record.sh"
+export FM_FAKE_SEND_RECORD_LIB
+
+# fm_test_fake_pane_readiness_budget: shorten bin/fm-launch-send-lib.sh's
+# launch-readiness wait for a FAKED pane, and only for a faked pane.
+#
+# A fake backend answers a pane capture with nothing, so the probe can only ever
+# reach its "no readable output" verdict there, and waiting out the production
+# budget for each faked spawn would cost minutes of suite time to learn that.
+#
+# This is NOT safe to set for the whole suite. A suite driving a REAL pane - the
+# real-herdr and real-tmux families - has a shell that renders a prompt and then
+# answers the probe a moment later, and a fraction-of-a-second budget turns that
+# ordinary startup into the probe's "renders but never executes" verdict, which
+# refuses the launch outright. So every fake-pane constructor calls this and a
+# real pane keeps the production budget it is entitled to. A suite that
+# exercises the readiness rule itself passes its own explicit budget instead.
+fm_test_fake_pane_readiness_budget() {
+  export FM_LAUNCH_READY_POLLS=2
+  export FM_LAUNCH_READY_INTERVAL=0.05
+}
