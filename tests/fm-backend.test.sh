@@ -37,6 +37,8 @@ fm_git_identity fmtest fmtest@example.invalid
 . "$ROOT/bin/fm-backend.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-backend-tests)
+CFG_DIR="$TMP_ROOT/empty-config"
+mkdir -p "$CFG_DIR"
 # A claude spawn writes workspace trust into the launching user's own store,
 # and the script resolves it as ${CLAUDE_CONFIG_DIR:-${HOME:-}}, so the value
 # is pinned EMPTY beside the throwaway HOME: an inherited one would beat that
@@ -1028,7 +1030,7 @@ test_spawn_refuses_unknown_backend_flag() {
   # bogus names a backend with no adapter at all; zellij and orca both
   # graduated to real adapters and have their own spawn tests.
   out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
-    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE="$CFG_DIR" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" nope-backend-z1 projects/none claude --mode no-mistakes --yolo off --backend bogus 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "fm-spawn --backend bogus should refuse"
@@ -1039,7 +1041,7 @@ test_spawn_refuses_unknown_backend_flag() {
 test_spawn_refuses_codex_app_backend_flag() {
   local out status
   out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
-    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 \
+    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE="$CFG_DIR" FM_SPAWN_NO_GUARD=1 \
     "$ROOT/bin/fm-spawn.sh" nope-codex-app-z1 projects/none claude --mode no-mistakes --yolo off --backend codex-app 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "fm-spawn --backend codex-app should refuse"
@@ -1050,7 +1052,7 @@ test_spawn_refuses_codex_app_backend_flag() {
 test_spawn_refuses_unknown_fm_backend_env() {
   local out status
   out=$(FM_ROOT_OVERRIDE='' FM_HOME='' FM_STATE_OVERRIDE='' FM_DATA_OVERRIDE='' \
-    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE='' FM_SPAWN_NO_GUARD=1 FM_BACKEND=bogus \
+    FM_PROJECTS_OVERRIDE='' FM_CONFIG_OVERRIDE="$CFG_DIR" FM_SPAWN_NO_GUARD=1 FM_BACKEND=bogus \
     "$ROOT/bin/fm-spawn.sh" nope-backend-z2 projects/none claude --mode no-mistakes --yolo off 2>&1)
   status=$?
   [ "$status" -ne 0 ] || fail "FM_BACKEND=bogus should refuse"
