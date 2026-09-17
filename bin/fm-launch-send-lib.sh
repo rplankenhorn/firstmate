@@ -92,7 +92,15 @@ fm_launch_chunks_var() {
     while [ "$((off + len))" -lt "${#text}" ]; do
       tail=${text:$((off + len)):1}
       ord=$(printf '%d' "'$tail")
-      [ "$ord" -lt -64 ] || break
+      # printf's numeric value for a high byte is signed on some bash builds
+      # and unsigned on others, so normalize to 0-255 before classifying it.
+      # Reading the sign convention instead left the snapping dead on every
+      # build that reports unsigned, which is why this is normalized here
+      # rather than compared against a negative bound.
+      [ "$ord" -ge 0 ] || ord=$((ord + 256))
+      # 0x80-0xBF is a UTF-8 continuation byte: the slice would end mid
+      # character. Anything else starts one, so the slice is already whole.
+      [ "$ord" -ge 128 ] && [ "$ord" -lt 192 ] || break
       len=$((len - 1))
       [ "$len" -gt 0 ] || { len=$size; break; }
     done
