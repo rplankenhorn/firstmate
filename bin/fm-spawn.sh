@@ -3649,6 +3649,15 @@ mkdir -p "$TASK_TMP/gotmp"
 # check or leak into a commit.
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
+# The launch command is recorded here and the pane is handed a line that sources
+# it, so the bytes typed into the pane never scale with the brief or the system
+# prompt (bin/fm-launch-send-lib.sh). It lives under the private, gitignored
+# state directory rather than /tmp because it carries the worker's whole system
+# prompt and brief pointer, and a shared temp root is another user's to
+# pre-create. The resolved path is what the pane is handed, because the line is
+# typed into a shell whose working directory is the worktree, not the home.
+# fm-teardown removes it with the task's other state records.
+LAUNCH_FILE="$STATE_REAL/$ID.launch"
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
@@ -4421,9 +4430,22 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
 sleep 0.3
-# Chunked so no single write can overflow the pane's input queue even if the
-# shell stops reading again between writes (bin/fm-launch-send-lib.sh).
-if ! fm_launch_send_literal_chunked spawn_send_literal_target "$LAUNCH"; then
+# The pane is handed a short line that sources the command instead of the
+# command itself, because the command scales with the brief and the system
+# prompt while the pane's input queue does not (bin/fm-launch-send-lib.sh owns
+# that rule and the measurement behind it). The write is still chunked, so even
+# this short line cannot be cut by a shell that stops reading mid-send.
+if ! fm_launch_command_file "$LAUNCH_FILE" "$LAUNCH"; then
+  printf 'failed: %s\n' "launch command could not be recorded for the pane" >>"$STATE/$ID.status"
+  echo "error: recording the launch command at $LAUNCH_FILE failed; no agent was started" >&2
+  exit 1
+fi
+if ! LAUNCH_SOURCE_LINE=$(fm_launch_source_line "$LAUNCH_FILE"); then
+  printf 'failed: %s\n' "launch command path cannot be typed into a pane" >>"$STATE/$ID.status"
+  echo "error: $LAUNCH_FILE contains a quote that cannot be passed through a shell line; no agent was started" >&2
+  exit 1
+fi
+if ! fm_launch_send_literal_chunked spawn_send_literal_target "$LAUNCH_SOURCE_LINE"; then
   printf 'failed: %s\n' "launch command could not be typed into the pane" >>"$STATE/$ID.status"
   echo "error: writing the launch command into window $T failed part-way; no agent was started" >&2
   exit 1

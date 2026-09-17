@@ -153,6 +153,56 @@ fixed_len=$(received_length 't:fixed' y) || fail "the fixed pane never answered"
   fail "expected all 8000 bytes after the readiness gate, got $fixed_len"
 pass "readiness gate plus chunked writes deliver all 8000 bytes to the same pane shape"
 
+# --- the file rule ------------------------------------------------------------
+
+# The record itself: the command must come back byte-for-byte, and the file must
+# not be readable by anyone else at any point, because it carries the worker's
+# whole system prompt and brief pointer.
+cmd_file="$SHIM_DIR/launch-command"
+fm_launch_command_file "$cmd_file" "z=$payload_ascii" ||
+  fail "fm_launch_command_file reported a failure"
+[ "$(cat "$cmd_file")" = "z=$payload_ascii" ] ||
+  fail "the recorded launch command did not come back byte-for-byte"
+# BSD stat first, GNU stat second: both supported platforms answer one of them.
+mode=$(stat -f '%OLp' "$cmd_file" 2>/dev/null || stat -c '%a' "$cmd_file")
+[ "$mode" = 600 ] ||
+  fail "the recorded launch command must be private to its owner, got mode $mode"
+# A nested destination is created rather than refused, so a caller is free to
+# keep the record beside the task's other state.
+fm_launch_command_file "$SHIM_DIR/nested/dir/launch-command" 'x=1' ||
+  fail "fm_launch_command_file should create a missing destination directory"
+pass "fm_launch_command_file records the command privately and byte-for-byte"
+
+# The typed line. It must stay short no matter how long the command is, and a
+# path that cannot be single-quoted is refused rather than emitted as a line
+# that would come apart in the pane.
+source_line=$(fm_launch_source_line "$cmd_file") ||
+  fail "fm_launch_source_line refused an ordinary path"
+[ "$(printf '%s' "$source_line" | wc -c)" -lt 1024 ] ||
+  fail "the typed line must stay under the smallest supported input queue"
+fm_launch_source_line "/tmp/it's/a/path" >/dev/null 2>&1 &&
+  fail "a path containing a single quote must be refused, not quoted badly"
+pass "fm_launch_source_line stays short and refuses an unquotable path"
+
+# End to end: the same pane shape that loses the tail of one long write receives
+# the whole 8000-byte command when only the source line is typed. This is the
+# rule that removes the hazard rather than narrowing it - the typed line does
+# not grow with the command.
+open_busy_window sourced 2
+send_line_sourced() { fm_backend_tmux_send_text_line 't:sourced' "$1"; }
+capture_sourced() { fm_backend_tmux_capture 't:sourced' 400 2>/dev/null || true; }
+send_literal_sourced() { fm_backend_tmux_send_literal 't:sourced' "$1"; }
+
+fm_launch_wait_shell_ready send_line_sourced capture_sourced 120 0.25 ||
+  fail "the readiness probe never came back from the sourcing pane"
+fm_launch_send_literal_chunked send_literal_sourced "$source_line" 512 0.05 ||
+  fail "writing the source line reported a failure"
+fm_backend_tmux_send_key 't:sourced' Enter
+sourced_len=$(received_length 't:sourced' z) || fail "the sourcing pane never answered"
+[ "$sourced_len" = 8000 ] ||
+  fail "expected all 8000 bytes of the recorded command, got $sourced_len"
+pass "a short source line delivers an 8000-byte command the pane would have truncated"
+
 # Verdict 1, the wedge: a pane that renders text but never reads input. This is
 # the case a caller must refuse, because a shell is demonstrably there and is
 # demonstrably not executing what was typed.

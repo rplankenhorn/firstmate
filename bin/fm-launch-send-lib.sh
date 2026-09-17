@@ -2,10 +2,12 @@
 # Shared launch-command delivery for a freshly created worker pane.
 # Usage: . bin/fm-launch-send-lib.sh
 #        fm_launch_wait_shell_ready <send-line-fn> <capture-fn> [<polls>] [<interval>]
+#        fm_launch_command_file <path> <text>
+#        fm_launch_source_line <path>           -> the short line to type
 #        fm_launch_send_literal_chunked <send-literal-fn> <text> [<size>] [<pause>]
 #        fm_launch_chunks_var <text> [<size>]   -> FM_LAUNCH_CHUNKS array
 #
-# ONE OWNER for the two rules that make a long launch command survive the trip
+# ONE OWNER for the three rules that make a long launch command survive the trip
 # into a pane shell. bin/fm-spawn.sh is the only production caller; the callbacks
 # are injected so the rules can be exercised against a real pane with no harness
 # and no spawn (tests/fm-spawn-launch-send.test.sh).
@@ -24,7 +26,16 @@
 # not of the command, so it is backend-independent: every backend writes into the
 # same pseudo-terminal.
 #
-# THE TWO RULES.
+# WHY CHUNKING WAS NOT ENOUGH. Measured 2026-09-17 on the same machine against a
+# real herdr pane, with the readiness gate confirmed AND 512-byte writes 0.05s
+# apart: about 2048 bytes of a ~2500-byte claude launch command arrived. Pausing
+# between writes does not make a receiver that is not reading start reading, so
+# a command long enough to refill the queue can still lose its tail even behind
+# a confirmed gate - and every write returned success while it happened. The
+# length itself is the hazard, so rule 3 removes it: the pane is handed a line
+# short enough that no queue on either platform can cut it.
+#
+# THE THREE RULES.
 #  1. fm_launch_wait_shell_ready proves the pane shell is reading and executing
 #     before anything long is typed. It is a round trip, not a rendered banner:
 #     the probe line is a printf the shell must RUN to produce the marker, and
@@ -47,11 +58,19 @@
 #     reserved for the case that actually needs the time - a pane that IS
 #     rendering and has not produced the marker yet, where waiting is what
 #     tells a slow prompt apart from a wedge.
-#  2. fm_launch_send_literal_chunked keeps any single write well under the
+#  2. fm_launch_command_file records the launch command in a private file and
+#     fm_launch_source_line returns the short `. <path>` line that runs it in
+#     the pane's own shell. Sourcing is what typing the command would have
+#     been - same shell, same process tree, same expansions at the same moment
+#     - so nothing about the launch changes except how many bytes crossed the
+#     terminal. That is the rule that actually bounds the hazard, because the
+#     typed line no longer scales with the brief, the environment prefix, or
+#     the system prompt.
+#  3. fm_launch_send_literal_chunked keeps any single write well under the
 #     queue, so a shell that stops reading again mid-send - a slow prompt hook
 #     firing between writes - cannot lose a tail either. This is defense in
-#     depth behind rule 1, not a replacement for it: chunking alone cannot help
-#     a shell that never drains.
+#     depth behind rules 1 and 2, not a replacement for either: chunking alone
+#     cannot help a shell that never drains, as the measurement above shows.
 #
 # TUNING. FM_LAUNCH_SEND_CHUNK bounds one write in bytes (default 512, capped at
 # 1024). FM_LAUNCH_SEND_PAUSE is the drain pause between writes.
@@ -113,6 +132,33 @@ fm_launch_chunks_var() {
     FM_LAUNCH_CHUNKS+=("${text:off:len}")
     off=$((off + len))
   done
+}
+
+# fm_launch_command_file <path> <text>: record the launch command at <path> so
+# the pane can be handed fm_launch_source_line's short line instead of thousands
+# of bytes of literal input. The file is created empty and its mode locked down
+# BEFORE the command text lands, because that text carries the worker's brief
+# and system prompt and must never be readable by another user even briefly.
+fm_launch_command_file() {
+  local path=$1 text=$2 dir
+  dir=${path%/*}
+  [ "$dir" != "$path" ] || dir=.
+  mkdir -p "$dir" || return 1
+  : >"$path" || return 1
+  chmod 0600 "$path" || return 1
+  printf '%s\n' "$text" >>"$path" || return 1
+}
+
+# fm_launch_source_line <path>: the line to type into the pane so its own shell
+# runs the recorded command. `.` rather than `source` because the pane's shell
+# may be any POSIX shell, and single-quoted because a home path can contain
+# spaces. A path containing a single quote cannot be quoted this way, so it is
+# refused rather than emitted as a line that would break apart in the pane.
+fm_launch_source_line() {
+  case "$1" in
+  *\'*) return 1 ;;
+  esac
+  printf ". '%s'" "$1"
 }
 
 # fm_launch_wait_shell_ready <send-line-fn> <capture-fn> [<polls>] [<interval>]:
