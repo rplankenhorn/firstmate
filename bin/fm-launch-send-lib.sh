@@ -77,15 +77,27 @@ fm_launch_chunk_size() {
 # fm_launch_chunks_var <text> [<size>]: split <text> into FM_LAUNCH_CHUNKS, each
 # at most <size> BYTES. The local LC_ALL=C is what makes the bound bytes rather
 # than characters: the queue counts bytes, so a multibyte path in the command
-# must not let a 512-character slice become a 1500-byte write.
+# must not let a 512-character slice become a 1500-byte write. The bound stays in
+# bytes, but a chunk never ends mid UTF-8 sequence: if the byte just past the
+# slice is a continuation byte (a partial character), the slice shrinks to the
+# last complete character, so every backend that decodes its write on its own
+# receives only whole characters.
 fm_launch_chunks_var() {
   local LC_ALL=C
-  local text=$1 size=${2:-} off=0
+  local text=$1 size=${2:-} off=0 len tail ord
   [ -n "$size" ] || size=$(fm_launch_chunk_size)
   FM_LAUNCH_CHUNKS=()
   while [ "$off" -lt "${#text}" ]; do
-    FM_LAUNCH_CHUNKS+=("${text:off:size}")
-    off=$((off + size))
+    len=$size
+    while [ "$((off + len))" -lt "${#text}" ]; do
+      tail=${text:$((off + len)):1}
+      ord=$(printf '%d' "'$tail")
+      [ "$ord" -lt -64 ] || break
+      len=$((len - 1))
+      [ "$len" -gt 0 ] || { len=$size; break; }
+    done
+    FM_LAUNCH_CHUNKS+=("${text:off:len}")
+    off=$((off + len))
   done
 }
 

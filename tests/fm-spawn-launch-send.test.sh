@@ -57,16 +57,25 @@ done
 pass "fm_launch_chunks_var splits to the bound and rejoins byte-for-byte"
 
 # The bound is BYTES, not characters: a multibyte path in a launch command must
-# not turn a 512-character slice into a write several times the queue.
-payload_utf8=$(printf 'é%.0s' $(seq 1 1000))
+# not turn a 512-character slice into a write several times the queue. The euro
+# sign is three bytes and 512 is not a multiple of three, so a naive byte split
+# would sever a character at every chunk boundary; each write must still be valid
+# UTF-8 on its own, because every backend decodes its own write.
+valid_utf8() { printf '%s' "$1" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; }
+command -v iconv >/dev/null 2>&1 || fail "iconv is required to check per-write UTF-8 validity"
+payload_utf8=$(printf '\xe2\x82\xac%.0s' $(seq 1 1000))
 fm_launch_chunks_var "$payload_utf8" 512
+[ "${#FM_LAUNCH_CHUNKS[@]}" -gt 1 ] ||
+  fail "a 3000-byte multibyte payload must split into more than one write"
 for chunk in "${FM_LAUNCH_CHUNKS[@]}"; do
   [ "$(printf '%s' "$chunk" | wc -c)" -le 512 ] ||
     fail "a multibyte write exceeded the 512-byte bound"
+  valid_utf8 "$chunk" ||
+    fail "a multibyte write ended mid-character and is not valid UTF-8 on its own"
 done
 joined=$(printf '%s' "${FM_LAUNCH_CHUNKS[@]}")
 [ "$joined" = "$payload_utf8" ] || fail "multibyte split then rejoin changed the text"
-pass "fm_launch_chunks_var bounds writes in bytes, not characters"
+pass "fm_launch_chunks_var bounds writes in bytes without severing a character"
 
 # shellcheck disable=SC2034  # read by fm_launch_chunk_size in this same shell
 FM_LAUNCH_SEND_CHUNK=notanumber
