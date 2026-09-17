@@ -195,4 +195,37 @@ fm_launch_wait_shell_ready send_line_blind capture_blank_rows 2 0.05 || verdict=
   fail "a blank-but-present capture must give verdict 2, got $verdict"
 pass "fm_launch_wait_shell_ready separates no readable output from a wedge"
 
+# The blank bound. A pane that has shown nothing at all has no shell that could
+# still be starting, so reaching verdict 2 must not cost the whole budget. A
+# pane that IS rendering keeps every poll, because elapsed time is the only
+# thing that tells an ordinary slow prompt from a wedged shell.
+blank_count="$SHIM_DIR/blank-polls"
+printf '0\n' >"$blank_count"
+capture_counting_blank() {
+  printf '%s\n' "$(($(cat "$blank_count") + 1))" >"$blank_count"
+  printf ''
+}
+verdict=0
+FM_LAUNCH_READY_BLANK_POLLS=3 \
+  fm_launch_wait_shell_ready send_line_blind capture_counting_blank 60 0.01 || verdict=$?
+[ "$verdict" = 2 ] ||
+  fail "a pane with no readable output must still give verdict 2, got $verdict"
+[ "$(cat "$blank_count")" = 3 ] ||
+  fail "the blank bound must end the wait after 3 polls, took $(cat "$blank_count")"
+
+ink_count="$SHIM_DIR/ink-polls"
+printf '0\n' >"$ink_count"
+capture_counting_ink() {
+  printf '%s\n' "$(($(cat "$ink_count") + 1))" >"$ink_count"
+  printf 'PROMPT\n'
+}
+verdict=0
+FM_LAUNCH_READY_BLANK_POLLS=3 \
+  fm_launch_wait_shell_ready send_line_blind capture_counting_ink 12 0.01 || verdict=$?
+[ "$verdict" = 1 ] ||
+  fail "a rendering pane that never runs the probe must still give verdict 1, got $verdict"
+[ "$(cat "$ink_count")" = 12 ] ||
+  fail "a rendering pane must keep the whole budget, took $(cat "$ink_count") of 12 polls"
+pass "the blank bound shortens only the pane that shows nothing"
+
 echo "all launch-send checks passed"

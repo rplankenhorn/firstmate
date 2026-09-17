@@ -52,23 +52,30 @@
 # launch command into a pane that renders text but never EXECUTES the probe it
 # was sent, because that is exactly the wedged shell the refusal exists for. A
 # fake whose capture-pane prints a frame, a prompt, or a composer box therefore
-# earns that refusal unless it also runs the probe. fm_fake_record_send answers
-# it on the fake's behalf: when a text line is the probe, it appends the marker
-# the probe would have printed to FM_FAKE_PANE_ECHO. A fake opts in by setting
-# that variable and including the file in what its own capture-pane prints:
+# earns that refusal unless it also runs the probe, and a fake that prints
+# nothing at all instead makes the launcher spend its blank bound learning that
+# there is no shell to judge. Either way the fake is the thing that is wrong: a
+# pane willing to accept a launch is a pane whose shell is reading.
 #
-#   capture-pane) ... ; [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
+# fm_fake_record_send answers the probe on the fake's behalf: when a text line
+# is the probe, it appends the marker the probe would have printed to the
+# fake's echo file. The marker is reconstructed from the two pieces the probe
+# carries rather than matched as one string, so the echo can never satisfy the
+# launcher's check without the fake having actually seen the probe line.
 #
-# The marker is reconstructed from the two pieces the probe carries rather than
-# matched as one string, so the echo can never satisfy the launcher's check
-# without the fake having actually seen the probe line.
+# A stub completes the round trip by printing that file from its own
+# capture-pane, which is the whole of the wiring:
+#
+#   capture-pane) ... ; fm_fake_print_pane_echo; exit 0 ;;
+#
+# The file defaults to one beside the stub itself, so a fake needs no env var
+# and every invocation of that one stub shares one file. FM_FAKE_PANE_ECHO
+# overrides the path for a fake that wants it somewhere its own test can read.
 
 # fm_fake_answer_ready_probe <text line>: if the line is the launch-readiness
-# probe, append the marker its printf would have produced to FM_FAKE_PANE_ECHO.
-# Unset FM_FAKE_PANE_ECHO means the fake does not render a pane and has nothing
-# to answer with, which the launcher treats as a notice rather than a refusal.
+# probe, append the marker its printf would have produced to this stub's echo
+# file. A stub that never prints that file from capture-pane is unaffected.
 fm_fake_answer_ready_probe() {
-  [ -n "${FM_FAKE_PANE_ECHO:-}" ] || return 0
   local line=$1 tail
   case "$line" in
   "printf '%s%s\\n' 'FM_LAUNCH_' '"*"'") ;;
@@ -76,7 +83,21 @@ fm_fake_answer_ready_probe() {
   esac
   tail=${line##*\'FM_LAUNCH_\' \'}
   tail=${tail%\'}
-  printf 'FM_LAUNCH_%s\n' "$tail" >>"$FM_FAKE_PANE_ECHO"
+  printf 'FM_LAUNCH_%s\n' "$tail" >>"$(fm_fake_pane_echo_path)"
+}
+
+# fm_fake_pane_echo_path: the file this stub answers probes into.
+fm_fake_pane_echo_path() {
+  printf '%s' "${FM_FAKE_PANE_ECHO:-$0.pane-echo}"
+}
+
+# fm_fake_print_pane_echo: print the probe answers this stub has accepted, for
+# its capture-pane to render. Nothing yet answered prints nothing, which is the
+# same blank frame the fake showed before it was wired.
+fm_fake_print_pane_echo() {
+  local echo_file
+  echo_file=$(fm_fake_pane_echo_path)
+  [ ! -s "$echo_file" ] || cat "$echo_file"
 }
 
 # fm_fake_record_send <send-keys argument list...>

@@ -88,10 +88,26 @@ Delivery contract: mode=no-mistakes
 EOF
   done
 
+  # This tmux answers the launch-readiness probe, so a spawn here confirms a
+  # reading shell at once. Without it the launcher spends its blank bound on a
+  # pane that shows nothing, which alone outlasts the `timeout -k 5 30` several
+  # cases wrap the spawn in, and those cases die before their own bound reports.
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
-case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    exit 0
+    ;;
+esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"

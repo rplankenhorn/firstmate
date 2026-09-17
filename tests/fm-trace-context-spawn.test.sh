@@ -27,7 +27,6 @@ EOF
 # argument (the GOTMPDIR export, the TRACEPARENT export, and the launch command)
 # one per line, in send order, so ordering is observable.
 make_spawn_fakebin() {
-  fm_test_fake_pane_readiness_budget
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   cat > "$fakebin/tmux" <<'SH'
@@ -75,6 +74,11 @@ case "${1:-}" in
     FM_FAKE_LAUNCH_LOG_TEXT_LINES=1
     . "$FM_FAKE_SEND_RECORD_LIB"
     fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac

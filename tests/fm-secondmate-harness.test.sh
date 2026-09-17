@@ -651,7 +651,6 @@ meta_field() { grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-; }
 make_launch_capturing_tmux() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
-  fm_test_fake_pane_readiness_budget
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -665,6 +664,11 @@ case "${1:-}" in
   send-keys)
     . "$FM_FAKE_SEND_RECORD_LIB"
     fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac
@@ -1075,6 +1079,8 @@ SH
   chmod +x "$fakebin/gh-axi"
   # tmux fake supports fm-send's composer-verified submit path and optional
   # FM_FAKE_TMUX_LOG / FM_FAKE_TMUX_FAIL_LITERAL for reread-nudge assertions.
+  # It renders a prompt, so it must also RUN the launch-readiness probe: a pane
+  # that shows text and never executes it is the wedge the launcher refuses.
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
@@ -1088,13 +1094,20 @@ case "$*" in
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
-  *capture-pane*) printf '❯\n'; exit 0 ;;
+  *capture-pane*)
+    printf '❯\n'
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    exit 0
+    ;;
   *'send-keys'*' -l '*)
     [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
     exit 0
     ;;
   *send-keys*)
     [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    for fake_arg in "$@"; do fm_fake_answer_ready_probe "$fake_arg"; done
     exit 0
     ;;
 esac

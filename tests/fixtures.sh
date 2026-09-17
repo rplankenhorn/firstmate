@@ -100,9 +100,12 @@ fm_test_fake_gh_axi() {
 # The pane path defaults to empty when FM_FAKE_PANE_PATH is unset. Window
 # cleanup and option operations are no-ops. Launch logging is env-gated, so
 # suites that do not set FM_FAKE_LAUNCH_LOG keep a silent send-keys.
+#
+# capture-pane renders the launch-readiness probe answers the same library
+# collected, so a spawn here confirms a reading shell at once instead of
+# spending the launcher's blank bound on a pane that shows nothing.
 fm_test_fake_tmux_spawn() {
   local fakebin=$1
-  fm_test_fake_pane_readiness_budget
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -121,6 +124,11 @@ case "${1:-}" in
   send-keys)
     . "$FM_FAKE_SEND_RECORD_LIB"
     fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac

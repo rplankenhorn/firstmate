@@ -402,7 +402,17 @@ case "${1:-}" in
     printf '%%1\n'
     exit 0
     ;;
-  set-window-option|send-keys) exit 0 ;;
+  set-window-option) exit 0 ;;
+  send-keys)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    exit 0
+    ;;
 esac
 exit 0
 SH
@@ -477,7 +487,13 @@ case "${1:-} ${2:-}" in
   "pane close")
     [ "${3:-}" = p-old ] && : > "$killed"
     ;;
+  "pane read")
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    ;;
   "pane run"|"pane send-text"|"pane send-keys"|"tab close")
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    for fake_arg in "$@"; do fm_fake_answer_ready_probe "$fake_arg"; done
     ;;
   *)
     exit 1

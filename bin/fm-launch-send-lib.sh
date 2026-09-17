@@ -40,7 +40,13 @@
 #     in bin/fm-spawn.sh already treat as a notice rather than a refusal.
 #     A slow-starting shell is NOT case 2: it renders the moment it starts and
 #     then runs the probe that was queued while it was busy, so it reaches 0.
-#     Case 2 in practice means a backend that never ran a shell at all.
+#     Case 2 in practice means a backend that never ran a shell at all, so it
+#     does not need the whole budget to conclude: once a much shorter blank
+#     bound has passed with no frame at all, the remaining polls can only buy
+#     the same silence again, and the wait returns 2 early. The full budget is
+#     reserved for the case that actually needs the time - a pane that IS
+#     rendering and has not produced the marker yet, where waiting is what
+#     tells a slow prompt apart from a wedge.
 #  2. fm_launch_send_literal_chunked keeps any single write well under the
 #     queue, so a shell that stops reading again mid-send - a slow prompt hook
 #     firing between writes - cannot lose a tail either. This is defense in
@@ -52,15 +58,15 @@
 # FM_LAUNCH_READY_POLLS and FM_LAUNCH_READY_INTERVAL bound the readiness wait,
 # and the same two values are the optional fourth and fifth arguments so a
 # caller that already owns a timeout policy is not forced through an env var.
-# The suite sets a short budget once in tests/fixtures.sh: every fake backend
-# there returns case 2, and waiting out the production budget for each of them
-# would cost minutes of test time to learn nothing.
+# FM_LAUNCH_READY_BLANK_POLLS is the blank bound above, in the same poll units
+# and never longer than the budget itself.
 
 FM_LAUNCH_SEND_CHUNK_DEFAULT=512
 FM_LAUNCH_SEND_CHUNK_MAX=1024
 FM_LAUNCH_SEND_PAUSE_DEFAULT=0.05
 FM_LAUNCH_READY_POLLS_DEFAULT=120
 FM_LAUNCH_READY_INTERVAL_DEFAULT=0.25
+FM_LAUNCH_READY_BLANK_POLLS_DEFAULT=40
 
 # fm_launch_chunk_size: the validated per-write byte bound. A malformed or zero
 # FM_LAUNCH_SEND_CHUNK falls back to the default rather than producing an empty
@@ -119,8 +125,11 @@ fm_launch_wait_shell_ready() {
   local send=$1 capture=$2
   local polls=${3:-${FM_LAUNCH_READY_POLLS:-$FM_LAUNCH_READY_POLLS_DEFAULT}}
   local interval=${4:-${FM_LAUNCH_READY_INTERVAL:-$FM_LAUNCH_READY_INTERVAL_DEFAULT}}
+  local blank=${FM_LAUNCH_READY_BLANK_POLLS:-$FM_LAUNCH_READY_BLANK_POLLS_DEFAULT}
   local tail marker pane pane_ink i=0 rendered=0
   case "$polls" in '' | *[!0-9]* | 0) polls=$FM_LAUNCH_READY_POLLS_DEFAULT ;; esac
+  case "$blank" in '' | *[!0-9]* | 0) blank=$FM_LAUNCH_READY_BLANK_POLLS_DEFAULT ;; esac
+  [ "$blank" -le "$polls" ] || blank=$polls
   # The marker is split across two printf arguments so the pane's echo of the
   # typed line cannot contain it; only the shell's own OUTPUT can.
   tail="READY_$$_${RANDOM}${RANDOM}"
@@ -140,6 +149,9 @@ fm_launch_wait_shell_ready() {
       [ -z "$pane_ink" ] || rendered=1
     fi
     i=$((i + 1))
+    # Nothing has rendered by the blank bound: there is no shell here to be
+    # slow, so the remaining budget can only buy the same silence again.
+    [ "$rendered" = 1 ] || [ "$i" -lt "$blank" ] || return 2
     [ "$i" -ge "$polls" ] || sleep "$interval"
   done
   [ "$rendered" = 1 ] || return 2

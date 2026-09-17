@@ -102,6 +102,10 @@ case "${1:-}" in
     fm_fake_record_send "$@"
     exit 0
     ;;
+  capture-pane)
+    fm_fake_print_pane_echo
+    exit 0
+    ;;
 esac
 exit 0
 SH
