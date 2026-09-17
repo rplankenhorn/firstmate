@@ -1,0 +1,9 @@
+# Real-Herdr 0.9.1 relaunch-readiness e2e (reproduces CI run 35239226403 failure)
+$ bash tests/fm-launch-relaunch-readiness-herdr-e2e.test.sh
+
+ok - real herdr 0.9.1: an unconsumed interrupt key makes the readiness probe fail
+ok - real herdr 0.9.1: the input reset clears the stray key and readiness is confirmed
+ok - real herdr 0.9.1: the input reset does not rescue a shell that is not reading
+ok - real herdr 0.9.1: a relaunch into a pane holding an unconsumed interrupt key delivers its launch
+all launch relaunch-readiness checks passed
+EXIT=0

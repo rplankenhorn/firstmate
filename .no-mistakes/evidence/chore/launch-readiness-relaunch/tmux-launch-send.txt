@@ -1,0 +1,19 @@
+# Portable tmux-backed launch-send regression
+$ bash tests/fm-spawn-launch-send.test.sh
+
+ok - fm_launch_chunks_var splits to the bound and rejoins byte-for-byte
+ok - fm_launch_chunks_var bounds writes in bytes without severing a character
+ok - fm_launch_chunk_size refuses a malformed or oversized override
+ok - a single long write into a pane that is not reading loses its tail (1022 of 8000 bytes)
+ok - readiness gate plus chunked writes deliver all 8000 bytes to the same pane shape
+ok - fm_launch_command_file records the command privately and byte-for-byte
+ok - fm_launch_source_line stays short and refuses an unquotable path
+ok - a short source line delivers an 8000-byte command the pane would have truncated
+ok - fm_launch_wait_shell_ready refuses a pane that renders but never executes
+ok - fm_launch_wait_shell_ready separates no readable output from a wedge
+ok - the blank bound shortens only the pane that shows nothing
+ok - an unconsumed interrupt key in a reused pane makes the readiness probe fail
+ok - fm_launch_reset_pane_input clears the stray key and the same pane confirms readiness
+ok - the input reset does not rescue a shell that is genuinely not reading
+all launch-send checks passed
+EXIT=0
