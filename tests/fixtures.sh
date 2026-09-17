@@ -30,6 +30,15 @@ export FM_TEST_NO_MISTAKES_FAKE_VERSION="no-mistakes version v${FM_TEST_NO_MISTA
 export FM_TEST_NO_MISTAKES_FAKE_VERSION_TS="${FM_TEST_NO_MISTAKES_FAKE_VERSION} 2026-06-27T00:02:18Z"
 export FM_TEST_GH_AXI_VERSION=0.1.29
 
+# Every fake backend in this suite answers a pane capture with nothing, so
+# bin/fm-launch-send-lib.sh's readiness probe can only ever reach its
+# "no readable output" verdict here. Waiting out the production budget for each
+# faked spawn would cost minutes of suite time to learn that. Shorten it once,
+# centrally, so no individual test carries a copy of this knowledge; the tests
+# that exercise the readiness rule itself pass their own explicit budget.
+export FM_LAUNCH_READY_POLLS=2
+export FM_LAUNCH_READY_INTERVAL=0.05
+
 # --- fake no-mistakes -------------------------------------------------------
 
 # fm_test_fake_no_mistakes <fakebin>
