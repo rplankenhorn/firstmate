@@ -80,6 +80,11 @@ make_tmux_stub() {  # <dir> -> echoes fakebin dir
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+# tests/fake-tmux-send-record.sh answers the launch-readiness probe; the pane
+# this fake renders would otherwise read as a shell that renders and never
+# executes, and the launch would be refused.
+FM_FAKE_PANE_ECHO="$D/pane-echo"
+. "$FM_FAKE_SEND_RECORD_LIB"
 case "${1:-}" in
   send-keys)
     shift
@@ -103,6 +108,7 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      fm_fake_answer_ready_probe "$payload"
       if [ -n "${FM_FAKE_INTERRUPT_STOPS_AGENT:-}" ] \
          && { [ "$payload" = Escape ] || [ "$payload" = C-c ]; }; then
         printf 'zsh' > "$D/command"
@@ -127,6 +133,7 @@ case "${1:-}" in
     printf 'fakepane\n'; exit 0 ;;
   capture-pane)
     if [ -f "$D/pane" ]; then cat "$D/pane"; else printf '╭────╮\n│    │\n╰────╯\n'; fi
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
     exit 0 ;;
   list-windows)
     if [ -f "$D/windows" ]; then cat "$D/windows"; fi

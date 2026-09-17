@@ -25,9 +25,15 @@ make_fake_tmux() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+# The composer below is a pane that renders; tests/fake-tmux-send-record.sh
+# answers the launch-readiness probe so the launcher does not read it as a
+# shell that renders and never executes, and refuse the launch.
+FM_FAKE_PANE_ECHO="$FM_FAKE_TMUX_CAPTURE.echo"
+. "$FM_FAKE_SEND_RECORD_LIB"
 case "${1:-}" in
   has-session|new-session|new-window|send-keys|kill-window)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
+    for fake_arg in "$@"; do fm_fake_answer_ready_probe "$fake_arg"; done
     exit 0
     ;;
   list-windows)
@@ -63,6 +69,7 @@ EOF
   capture-pane)
     printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
     cat "$FM_FAKE_TMUX_CAPTURE"
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
     exit 0
     ;;
 esac

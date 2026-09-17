@@ -32,6 +32,28 @@ make_rovo_fakebin() {
 set -u
 printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
 state=$(cat "$FM_FAKE_ROVO_STATE" 2>/dev/null || true)
+# tests/fake-tmux-send-record.sh owns both launch-delivery rules this fake
+# depends on: it answers the readiness probe so the rovo-shaped screen below is
+# not read as a shell that renders and never executes, and it reassembles the
+# chunked writes so rovo_on_line classifies the COMPLETE command. Classifying a
+# single chunk put 'run --yolo' in one piece and not the others, which sent the
+# launch down the pointer branch.
+FM_FAKE_PANE_ECHO="$FM_FAKE_ROVO_STATE.echo"
+FM_FAKE_SEND_BUFFER="$FM_FAKE_ROVO_STATE.sendbuf"
+FM_FAKE_SEND_ON_LINE=rovo_on_line
+. "$FM_FAKE_SEND_RECORD_LIB"
+rovo_on_line() {
+  case "$1" in
+    *'run --yolo'*)
+      printf '%s\n' "$1" >> "$FM_FAKE_LAUNCH_LOG"
+      printf 'launched\n' > "$FM_FAKE_ROVO_STATE"
+      ;;
+    *)
+      printf '%s\n' "$1" >> "$FM_FAKE_POINTER_LOG"
+      printf 'pointer-typed\n' > "$FM_FAKE_ROVO_STATE"
+      ;;
+  esac
+}
 fake_screen() {
   case "$state" in
     ready)
@@ -64,25 +86,13 @@ case "${1:-}" in
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    prev=
-    literal=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then literal=$arg; break; fi
-      prev=$arg
-    done
-    if [ -n "$literal" ]; then
-      case "$literal" in
-        *'run --yolo'*)
-          printf '%s\n' "$literal" >> "$FM_FAKE_LAUNCH_LOG"
-          printf 'launched\n' > "$FM_FAKE_ROVO_STATE"
-          ;;
-        *)
-          printf '%s\n' "$literal" >> "$FM_FAKE_POINTER_LOG"
-          printf 'pointer-typed\n' > "$FM_FAKE_ROVO_STATE"
-          ;;
-      esac
-      exit 0
-    fi
+    # The recorder yields the launch log to rovo_on_line because this fake sets
+    # FM_FAKE_SEND_ON_LINE, so the raw chunks are not appended to it.
+    fm_fake_record_send "$@"
+    # rovo_on_line may have just advanced the state, and the Enter that carried
+    # the completed line is the same invocation, so re-read it before the gate
+    # below decides what that Enter means.
+    state=$(cat "$FM_FAKE_ROVO_STATE" 2>/dev/null || true)
     case " $* " in
       *' Enter '*)
         case "$state" in
@@ -117,6 +127,7 @@ case "${1:-}" in
       *) fake_screen | awk -v start="$start" -v end="$end" \
            'NR - 1 >= start && NR - 1 <= end' ;;
     esac
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
     exit 0
     ;;
 esac

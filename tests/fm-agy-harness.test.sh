@@ -455,6 +455,22 @@ make_agy_fakebin() {
 set -u
 printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
 state=$(cat "$FM_FAKE_AGY_STATE" 2>/dev/null || true)
+# tests/fake-tmux-send-record.sh answers the readiness probe, so the agy-shaped
+# screen below is not read as a shell that renders and never executes, and
+# reassembles the chunked writes so agy_on_line classifies the COMPLETE command
+# rather than whichever chunk happened to carry --prompt-interactive.
+FM_FAKE_PANE_ECHO="$FM_FAKE_AGY_STATE.echo"
+FM_FAKE_SEND_BUFFER="$FM_FAKE_AGY_STATE.sendbuf"
+FM_FAKE_SEND_ON_LINE=agy_on_line
+. "$FM_FAKE_SEND_RECORD_LIB"
+agy_on_line() {
+  case "$1" in
+    *--prompt-interactive*)
+      printf '%s\n' "$1" >> "$FM_FAKE_LAUNCH_LOG"
+      printf 'launched\n' > "$FM_FAKE_AGY_STATE"
+      ;;
+  esac
+}
 fake_screen() {
   case "$state" in
     dialog)
@@ -487,21 +503,12 @@ case "${1:-}" in
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    literal=
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then literal=$arg; break; fi
-      prev=$arg
-    done
-    if [ -n "$literal" ]; then
-      case "$literal" in
-        *--prompt-interactive*)
-          printf '%s\n' "$literal" >> "$FM_FAKE_LAUNCH_LOG"
-          printf 'launched\n' > "$FM_FAKE_AGY_STATE"
-          ;;
-      esac
-      exit 0
-    fi
+    # The recorder owns the launch log for this fake through agy_on_line, so it
+    # must not also append the raw chunks to it. The completed line and the
+    # Enter that submitted it arrive in the same invocation, so the state is
+    # re-read before the gate below decides what that Enter means.
+    fm_fake_record_send "$@"
+    state=$(cat "$FM_FAKE_AGY_STATE" 2>/dev/null || true)
     case " $* " in
       *' Enter '*)
         case "$state" in
@@ -524,7 +531,10 @@ case "${1:-}" in
     esac
     exit 0
     ;;
-  capture-pane) fake_screen; exit 0 ;;
+  capture-pane)
+    fake_screen
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
+    exit 0 ;;
 esac
 exit 0
 SH
