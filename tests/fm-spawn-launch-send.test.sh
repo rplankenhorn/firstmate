@@ -278,4 +278,81 @@ FM_LAUNCH_READY_BLANK_POLLS=3 \
   fail "a rendering pane must keep the whole budget, took $(cat "$ink_count") of 12 polls"
 pass "the blank bound shortens only the pane that shows nothing"
 
+# --- the reset a reused pane needs -------------------------------------------
+#
+# The relaunch case the three-valued verdict was never meant to catch. A pane
+# whose agent has exited can still be holding input nobody consumed: the
+# interrupt key the control plane typed at the agent went into a foreground
+# process that does not read stdin, and the shell picks it up when that process
+# exits. The stray byte then corrupts whatever is typed next - on tmux it is
+# read as the start of a key binding, on a backend that wraps its writes in
+# bracketed paste it eats the sequence's own introducer - so the probe never
+# runs and a shell that is reading perfectly well is refused. Two panes are
+# used rather than one because the mangled probe consumes the stray byte
+# itself: a second probe on the same pane would pass without any reset and
+# prove nothing.
+open_shell_window() { # <name>
+  tmux new-window -d -n "$1" 'exec bash --norc --noprofile -i' ||
+    fail "could not create window $1"
+  local i=0
+  while [ "$i" -lt 100 ]; do
+    case "$(fm_backend_tmux_capture "t:$1" 400 2>/dev/null || true)" in
+    *[![:space:]]*) return 0 ;;
+    esac
+    sleep 0.1
+    i=$((i + 1))
+  done
+  fail "window $1 never rendered a prompt"
+}
+
+# Leave the interrupt key pending in <name>'s line editor the way a departed
+# agent does: type it at a foreground process that does not read stdin, then
+# let that process exit.
+leave_pending_key() { # <name>
+  fm_backend_tmux_send_text_line "t:$1" 'sleep 2'
+  sleep 0.5
+  fm_backend_tmux_send_key "t:$1" Escape
+  sleep 3
+}
+
+open_shell_window leftover
+send_leftover() { fm_backend_tmux_send_text_line 't:leftover' "$1"; }
+capture_leftover() { fm_backend_tmux_capture 't:leftover' 400 2>/dev/null || true; }
+leave_pending_key leftover
+verdict=0
+fm_launch_wait_shell_ready send_leftover capture_leftover 12 0.25 || verdict=$?
+[ "$verdict" = 1 ] ||
+  fail "a pane holding an unconsumed interrupt key should mangle the probe and give verdict 1, got $verdict; the reset case below would prove nothing"
+pass "an unconsumed interrupt key in a reused pane makes the readiness probe fail"
+
+open_shell_window cleared
+send_cleared() { fm_backend_tmux_send_text_line 't:cleared' "$1"; }
+capture_cleared() { fm_backend_tmux_capture 't:cleared' 400 2>/dev/null || true; }
+send_key_cleared() { fm_backend_tmux_send_key 't:cleared' "$1"; }
+leave_pending_key cleared
+fm_launch_reset_pane_input send_key_cleared ||
+  fail "fm_launch_reset_pane_input reported a failure on a live pane"
+verdict=0
+fm_launch_wait_shell_ready send_cleared capture_cleared 12 0.25 || verdict=$?
+[ "$verdict" = 0 ] ||
+  fail "the same pane shape must confirm readiness once its input is reset, got verdict $verdict"
+pass "fm_launch_reset_pane_input clears the stray key and the same pane confirms readiness"
+
+# The reset must not turn the wedge into a pass. This shell ignores the
+# interrupt outright and never returns to reading, which is the condition the
+# refusal exists for, so it must still reach verdict 1 after being reset.
+open_shell_window stuck
+send_stuck() { fm_backend_tmux_send_text_line 't:stuck' "$1"; }
+capture_stuck() { fm_backend_tmux_capture 't:stuck' 400 2>/dev/null || true; }
+send_key_stuck() { fm_backend_tmux_send_key 't:stuck' "$1"; }
+fm_backend_tmux_send_text_line 't:stuck' "trap '' INT; sleep 600"
+sleep 1
+fm_launch_reset_pane_input send_key_stuck ||
+  fail "fm_launch_reset_pane_input reported a failure on the stuck pane"
+verdict=0
+fm_launch_wait_shell_ready send_stuck capture_stuck 8 0.25 || verdict=$?
+[ "$verdict" = 1 ] ||
+  fail "a shell that ignores the reset and never reads must still give verdict 1, got $verdict"
+pass "the input reset does not rescue a shell that is genuinely not reading"
+
 echo "all launch-send checks passed"

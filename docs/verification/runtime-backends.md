@@ -991,6 +991,55 @@ Observed 2026-08-19:
 ok - live Herdr submit confirm: Claude Code (2.1.236 (Claude Code)) on herdr 0.8.0 reports empty for a landed idle steer
 ```
 
+### Launch delivery into a reused pane
+
+Measured 2026-09-17 on macOS 26 (Darwin 25.6.0) aarch64 against Herdr 0.9.1 in an isolated `fm-lab-` session, the guarantee behind the input reset in `bin/fm-launch-send-lib.sh`.
+
+A pane whose agent has exited can still be holding input nobody consumed: the interrupt key the control plane typed at that agent went into a foreground process that does not read stdin, and the pane's shell picks it up the moment that process exits.
+`herdr pane run` wraps the next line in a bracketed-paste sequence, and the pending byte is consumed as that sequence's own introducer, so the line arrives as literal text instead of a command.
+With one Escape left pending that way, the readiness probe was typed into the pane and then read back:
+
+```sh
+herdr pane run <pane> 'sleep 3' --session <lab>
+herdr pane send-keys <pane> escape --session <lab>       # while the sleep holds the foreground
+herdr pane send-keys <pane> ctrl+c --session <lab>       # the reset, second arm only
+herdr pane run <pane> "printf '%s%s\n' 'FM_LAUNCH_' 'abc123'" --session <lab>
+herdr pane read <pane> --source recent --lines 200 --session <lab>
+```
+
+```text
+=== leftover ===
+  ~ [200~printf '%s%s\n' 'FM_LAUNCH_' 'abc123'~
+zsh: bad pattern: [200~printf
+
+=== reset ===
+  ~ printf '%s%s\n' 'FM_LAUNCH_' 'abc123'
+FM_LAUNCH_abc123
+```
+
+The shell was reading perfectly well in both arms, so the readiness gate's verdict 1 refused a launchable pane until the reset cleared the stray byte.
+The same byte would corrupt the file-sourcing line the launch itself types, which is why the reset is a delivery rule rather than a softer verdict.
+The refusal the gate exists for survives it: a pane holding `trap '' INT; sleep 600` ignores the reset, never runs the probe, and still reaches verdict 1.
+Refresh the live proof with:
+
+```sh
+HERDR_LAB_HELPER=bin/fm-herdr-lab.sh \
+  tests/fm-launch-relaunch-readiness-herdr-e2e.test.sh
+```
+
+Observed 2026-09-17:
+
+```text
+ok - real herdr 0.9.1: an unconsumed interrupt key makes the readiness probe fail
+ok - real herdr 0.9.1: the input reset clears the stray key and readiness is confirmed
+ok - real herdr 0.9.1: the input reset does not rescue a shell that is not reading
+ok - real herdr 0.9.1: a relaunch into a pane holding an unconsumed interrupt key delivers its launch
+all launch relaunch-readiness checks passed
+```
+
+`tests/fm-spawn-launch-send.test.sh` pins the same three classifier verdicts portably against real tmux panes and real processes, with no harness.
+The refusal is asserted at the gate rather than through a refused spawn, because on Herdr 0.9.1 `agent get` answers an agent-free pane with `agent_status` `unknown` instead of `agent_not_found`, so a spawn against a long-running foreground process stops earlier, in the recovery classifier, on an unrelated defect.
+
 ### Prune and respawn
 
 The real label-collision reproduction is owned by:

@@ -3254,7 +3254,7 @@ spawn_send_key() { # <target> <key>
   esac
 }
 
-# The three callbacks bin/fm-launch-send-lib.sh drives. They exist so that
+# The four callbacks bin/fm-launch-send-lib.sh drives. They exist so that
 # library owns the queue rules for every backend at once instead of each backend
 # re-deriving them, and so the rules can be tested against a real pane without a
 # spawn. Their bodies are the same channels every other pane write already uses.
@@ -3266,6 +3266,9 @@ spawn_send_text_line_target() { # <text>
 }
 spawn_send_literal_target() { # <text>
   spawn_send_literal "$T" "$1"
+}
+spawn_send_key_target() { # <key>
+  spawn_send_key "$T" "$1"
 }
 
 kimi_capture() {
@@ -3469,6 +3472,15 @@ agy_spawn_fail() {  # <detail>
 }
 
 if [ "$RELAUNCH" -eq 1 ]; then
+  # A reused pane can still be holding input nobody consumed - the interrupt key
+  # the control plane typed at the agent that has since exited - and a stray byte
+  # like that corrupts the next line typed into the pane, the re-home below and
+  # the readiness probe and launch command alike
+  # (bin/fm-launch-send-lib.sh owns that rule and the measurement behind it).
+  # Clear it before this path types anything. A pane that is unresponsive for a
+  # real reason is still refused by the readiness gate further down.
+  fm_launch_reset_pane_input spawn_send_key_target ||
+    echo "notice: window $T did not accept an input reset before relaunch, so it may still be holding input the departed agent never read; the readiness probe still decides whether the launch proceeds" >&2
   # No worktree is acquired: the recorded one is reused as-is. What must be
   # proven instead is that the adopted endpoint's shell is actually sitting in
   # that worktree, so the replacement agent starts where the work is rather
