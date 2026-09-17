@@ -1095,9 +1095,12 @@ case "$*" in
   *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
   *capture-pane*)
-    printf '❯\n'
+    # Scrollback first, prompt last: a shell's probe output scrolls ABOVE its
+    # prompt, and the composer classifier reads the LAST row, so printing the
+    # answers after the prompt would look like text left pending in the pane.
     . "$FM_FAKE_SEND_RECORD_LIB"
     fm_fake_print_pane_echo
+    printf '❯\n'
     exit 0
     ;;
   *'send-keys'*' -l '*)
