@@ -635,3 +635,9 @@ fm_test_base_path_sans() {
   done
   printf '%s\n' "$dir"
 }
+
+# tests/fake-tmux-send-record.sh owns how a fake tmux records send-keys; the
+# stubs are generated scripts, so they reach it through this path.
+FM_FAKE_SEND_RECORD_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fake-tmux-send-record.sh"
+export FM_FAKE_SEND_RECORD_LIB
+

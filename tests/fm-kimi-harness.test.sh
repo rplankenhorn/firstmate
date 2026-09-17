@@ -36,6 +36,26 @@ make_spawn_fakebin() {
 set -u
 printf '%s\n' "$*" >> "$FM_FAKE_TMUX_CALL_LOG"
 state=$(cat "$FM_FAKE_KIMI_STATE" 2>/dev/null || true)
+# tests/fake-tmux-send-record.sh answers the readiness probe, so the
+# kimi-shaped screen below is not read as a shell that renders and never
+# executes, and reassembles the chunked writes so kimi_on_line classifies the
+# COMPLETE command rather than whichever chunk happened to carry ' --auto'.
+FM_FAKE_PANE_ECHO="$FM_FAKE_KIMI_STATE.echo"
+FM_FAKE_SEND_BUFFER="$FM_FAKE_KIMI_STATE.sendbuf"
+FM_FAKE_SEND_ON_LINE=kimi_on_line
+. "$FM_FAKE_SEND_RECORD_LIB"
+kimi_on_line() {
+  case "$1" in
+    *' --auto')
+      printf '%s\n' "$1" >> "$FM_FAKE_LAUNCH_LOG"
+      printf 'launched\n' > "$FM_FAKE_KIMI_STATE"
+      ;;
+    *)
+      printf '%s\n' "$1" >> "$FM_FAKE_POINTER_LOG"
+      printf 'pointer-typed\n' > "$FM_FAKE_KIMI_STATE"
+      ;;
+  esac
+}
 fake_screen() {
   case "$state" in
     ready)
@@ -68,25 +88,12 @@ case "${1:-}" in
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    prev=
-    literal=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then literal=$arg; break; fi
-      prev=$arg
-    done
-    if [ -n "$literal" ]; then
-      case "$literal" in
-        *' --auto')
-          printf '%s\n' "$literal" >> "$FM_FAKE_LAUNCH_LOG"
-          printf 'launched\n' > "$FM_FAKE_KIMI_STATE"
-          ;;
-        *)
-          printf '%s\n' "$literal" >> "$FM_FAKE_POINTER_LOG"
-          printf 'pointer-typed\n' > "$FM_FAKE_KIMI_STATE"
-          ;;
-      esac
-      exit 0
-    fi
+    # The recorder owns the launch log for this fake through kimi_on_line, so it
+    # must not also append the raw chunks to it. The completed line and the
+    # Enter that submitted it arrive in the same invocation, so the state is
+    # re-read before the gate below decides what that Enter means.
+    fm_fake_record_send "$@"
+    state=$(cat "$FM_FAKE_KIMI_STATE" 2>/dev/null || true)
     case " $* " in
       *' Enter '*)
         case "$state" in
@@ -126,6 +133,7 @@ case "${1:-}" in
       *) fake_screen | awk -v start="$start" -v end="$end" \
            'NR - 1 >= start && NR - 1 <= end' ;;
     esac
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
     exit 0
     ;;
 esac

@@ -72,6 +72,17 @@ make_spawn_fakebin() {
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 set -u
+FM_FAKE_SEND_BUFFER="${FM_FAKE_LAUNCH_LOG:-/dev/null}.sendbuf"
+FM_FAKE_SEND_ON_LINE=muse_on_line
+. "$FM_FAKE_SEND_RECORD_LIB"
+muse_on_line() {
+  printf '%s\n' "$1" >> "$FM_FAKE_LAUNCH_LOG"
+  if [ "${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" = 1 ]; then
+    case "$1" in
+      *"$FM_FAKE_MUSE_EXECUTABLE"*) (cd "$FM_FAKE_PANE_PATH" && bash -c "$1") ;;
+    esac
+  fi
+}
 case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
 esac
@@ -85,19 +96,14 @@ case "${1:-}" in
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    prev=
-    for arg in "$@"; do
-      if [ "$prev" = -l ]; then
-        printf '%s\n' "$arg" >> "$FM_FAKE_LAUNCH_LOG"
-        if [ "${FM_FAKE_EXECUTE_MUSE_LAUNCH:-}" = 1 ]; then
-          case "$arg" in
-            *"$FM_FAKE_MUSE_EXECUTABLE"*) (cd "$FM_FAKE_PANE_PATH" && bash -c "$arg") ;;
-          esac
-        fi
-        break
-      fi
-      prev=$arg
-    done
+    # tests/fake-tmux-send-record.sh reassembles the chunked writes before
+    # muse_on_line sees them. This fake RUNS the launch it is handed, so a
+    # single chunk would have executed a fragment of the command.
+    fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac

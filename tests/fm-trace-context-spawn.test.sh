@@ -66,23 +66,19 @@ case "${1:-}" in
         esac
       done
     fi
-    # Capture the text payload of both send forms: the literal launch
-    # (`send-keys -t <target> -l <text>`) and a text line
-    # (`send-keys -t <target> <text> Enter`). Skip the flags, the target, and
-    # the trailing key so only the payload is logged, one per line, in order.
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      shift
-      skip_next=
-      for a in "$@"; do
-        if [ -n "$skip_next" ]; then skip_next=; continue; fi
-        case "$a" in
-          -t) skip_next=1; continue ;;
-          -l) continue ;;
-          Enter|C-m) continue ;;
-          *) printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG" ;;
-        esac
-      done
-    fi
+    # Capture the payload of both send forms - the literal launch and a text
+    # line - through tests/fake-tmux-send-record.sh, which owns the rule. This
+    # suite asserts on the exports as well as the launch, so it opts into
+    # recording text lines; the launch itself stays one line however many
+    # queue-safe writes carry it.
+    FM_FAKE_LAUNCH_LOG_TEXT_LINES=1
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac

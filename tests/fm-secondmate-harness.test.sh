@@ -642,10 +642,10 @@ test_spawn_cursor_secondmate_launches_with_its_primary_contract() {
 
 meta_field() { grep "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-; }
 
-# A tmux stub that behaves like make_noop_tmux but also captures the literal
-# `send-keys -l <cmd>` launch command into FM_FAKE_LAUNCH_LOG, mirroring the
-# capture technique in fm-spawn-dispatch-profile.test.sh so the constructed
-# launch command (not just meta) can be asserted on. Also answers the
+# A tmux stub that behaves like make_noop_tmux but also captures the
+# `send-keys` launch command into FM_FAKE_LAUNCH_LOG through
+# tests/fake-tmux-send-record.sh, so the constructed launch command (not just
+# meta) can be asserted on. Also answers the
 # `#{pane_current_path}` probe from FM_FAKE_PANE_PATH so this same stub works
 # for a crew/scout (non-secondmate) spawn's treehouse-worktree wait loop.
 make_launch_capturing_tmux() {
@@ -662,15 +662,13 @@ case "${1:-}" in
   list-windows) exit 0 ;;
   has-session|new-session|new-window|kill-window) exit 0 ;;
   send-keys)
-    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
-      prev=
-      for a in "$@"; do
-        if [ "$prev" = "-l" ]; then
-          printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
-        fi
-        prev=$a
-      done
-    fi
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_record_send "$@"
+    exit 0
+    ;;
+  capture-pane)
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
     exit 0
     ;;
 esac
@@ -1081,6 +1079,8 @@ SH
   chmod +x "$fakebin/gh-axi"
   # tmux fake supports fm-send's composer-verified submit path and optional
   # FM_FAKE_TMUX_LOG / FM_FAKE_TMUX_FAIL_LITERAL for reread-nudge assertions.
+  # It renders a prompt, so it must also RUN the launch-readiness probe: a pane
+  # that shows text and never executes it is the wedge the launcher refuses.
   cat > "$fakebin/tmux" <<'SH'
 #!/usr/bin/env bash
 if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
@@ -1094,13 +1094,23 @@ case "$*" in
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
-  *capture-pane*) printf '❯\n'; exit 0 ;;
+  *capture-pane*)
+    # Scrollback first, prompt last: a shell's probe output scrolls ABOVE its
+    # prompt, and the composer classifier reads the LAST row, so printing the
+    # answers after the prompt would look like text left pending in the pane.
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    printf '❯\n'
+    exit 0
+    ;;
   *'send-keys'*' -l '*)
     [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
     exit 0
     ;;
   *send-keys*)
     [ "${FM_FAKE_TMUX_FAIL_LITERAL:-0}" = 1 ] && exit 1
+    . "$FM_FAKE_SEND_RECORD_LIB"
+    for fake_arg in "$@"; do fm_fake_answer_ready_probe "$fake_arg"; done
     exit 0
     ;;
 esac

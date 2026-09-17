@@ -500,6 +500,8 @@ fm_backlog_directory_present "$STATE" "state directory" || {
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# shellcheck source=bin/fm-launch-send-lib.sh
+. "$SCRIPT_DIR/fm-launch-send-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -3252,6 +3254,20 @@ spawn_send_key() { # <target> <key>
   esac
 }
 
+# The three callbacks bin/fm-launch-send-lib.sh drives. They exist so that
+# library owns the queue rules for every backend at once instead of each backend
+# re-deriving them, and so the rules can be tested against a real pane without a
+# spawn. Their bodies are the same channels every other pane write already uses.
+spawn_pane_capture() {
+  fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
+}
+spawn_send_text_line_target() { # <text>
+  spawn_send_text_line "$T" "$1"
+}
+spawn_send_literal_target() { # <text>
+  spawn_send_literal "$T" "$1"
+}
+
 kimi_capture() {
   fm_backend_capture "$BACKEND" "$T" 120 "$W" 2>/dev/null || true
 }
@@ -3633,6 +3649,15 @@ mkdir -p "$TASK_TMP/gotmp"
 # check or leak into a commit.
 mkdir -p "$STATE"
 STATE_REAL=$(cd "$STATE" && pwd -P)
+# The launch command is recorded here and the pane is handed a line that sources
+# it, so the bytes typed into the pane never scale with the brief or the system
+# prompt (bin/fm-launch-send-lib.sh). It lives under the private, gitignored
+# state directory rather than /tmp because it carries the worker's whole system
+# prompt and brief pointer, and a shared temp root is another user's to
+# pre-create. The resolved path is what the pane is handed, because the line is
+# typed into a shell whose working directory is the worktree, not the home.
+# fm-teardown removes it with the task's other state records.
+LAUNCH_FILE="$STATE_REAL/$ID.launch"
 TURNEND="$STATE_REAL/$ID.turn-ended"
 exclude_path() {
   local rel=$1 EXCL
@@ -4334,9 +4359,30 @@ spawn_record_traceparent() {
   return "$status"
 }
 
+# Everything below types into the pane's shell, and a shell still running its
+# startup files silently discards input past its pseudo-terminal's queue
+# (bin/fm-launch-send-lib.sh owns that rule and the measurements behind it).
+# Confirm the shell is reading and executing BEFORE the first write, so neither
+# the env exports nor the launch command can lose a tail. A pane that never
+# answers is a refusal: typing a truncated launch command wedges the shell on a
+# quote continuation and creates no agent, which reads downstream as a worker
+# that started and hung rather than one that never launched.
+LAUNCH_READY_VERDICT=0
+fm_launch_wait_shell_ready spawn_send_text_line_target spawn_pane_capture ||
+  LAUNCH_READY_VERDICT=$?
+case "$LAUNCH_READY_VERDICT" in
+1)
+  printf 'failed: %s\n' "pane shell never confirmed it was reading input; launch refused" >>"$STATE/$ID.status"
+  echo "error: the worker pane renders but never ran the readiness probe, so its shell is not reading input; refusing to type the launch command into it (window $T)" >&2
+  exit 1
+  ;;
+2)
+  echo "notice: window $T returned no readable output, so the pane shell's readiness could not be confirmed; launching unconfirmed with chunked writes" >&2
+  ;;
+esac
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
-# the env is set when the agent starts; the brief sleep lets the export land.
+# the env is set when the agent starts.
 spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
 # Mark the pane as a task worker so bin/fm-test-run.sh can refuse to run the
 # suite in the repository's primary checkout. Ship and scout workers are the
@@ -4384,7 +4430,26 @@ if [ "$LAUNCH_ENV_ENABLED" = 1 ]; then
   LAUNCH="$LAUNCH_ENV_PREFIX /bin/sh -c $(shell_quote "$LAUNCH")"
 fi
 sleep 0.3
-spawn_send_literal "$T" "$LAUNCH"
+# The pane is handed a short line that sources the command instead of the
+# command itself, because the command scales with the brief and the system
+# prompt while the pane's input queue does not (bin/fm-launch-send-lib.sh owns
+# that rule and the measurement behind it). The write is still chunked, so even
+# this short line cannot be cut by a shell that stops reading mid-send.
+if ! fm_launch_command_file "$LAUNCH_FILE" "$LAUNCH"; then
+  printf 'failed: %s\n' "launch command could not be recorded for the pane" >>"$STATE/$ID.status"
+  echo "error: recording the launch command at $LAUNCH_FILE failed; no agent was started" >&2
+  exit 1
+fi
+if ! LAUNCH_SOURCE_LINE=$(fm_launch_source_line "$LAUNCH_FILE"); then
+  printf 'failed: %s\n' "launch command path cannot be typed into a pane" >>"$STATE/$ID.status"
+  echo "error: $LAUNCH_FILE contains a quote that cannot be passed through a shell line; no agent was started" >&2
+  exit 1
+fi
+if ! fm_launch_send_literal_chunked spawn_send_literal_target "$LAUNCH_SOURCE_LINE"; then
+  printf 'failed: %s\n' "launch command could not be typed into the pane" >>"$STATE/$ID.status"
+  echo "error: writing the launch command into window $T failed part-way; no agent was started" >&2
+  exit 1
+fi
 sleep 0.3
 if [ "${HERDR_PROJECTED:-0}" -eq 1 ]; then
   HERDR_PROJECTION_ABORT_CLEANUP=0

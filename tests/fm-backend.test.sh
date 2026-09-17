@@ -805,6 +805,14 @@ case "\${1:-}" in
     for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  send-keys)
+    . "\$FM_FAKE_SEND_RECORD_LIB"
+    for a in "\$@"; do fm_fake_answer_ready_probe "\$a"; done
+    exit 0 ;;
+  capture-pane)
+    . "\$FM_FAKE_SEND_RECORD_LIB"
+    fm_fake_print_pane_echo
+    exit 0 ;;
 esac
 exit 0
 SH

@@ -57,6 +57,11 @@ make_tmux_stub() {  # <dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+# tests/fake-tmux-send-record.sh answers the launch-readiness probe on this
+# fake's behalf; without it the composer frame below is a pane that renders
+# and never executes, which the launcher refuses to type a command into.
+FM_FAKE_PANE_ECHO="$D/pane-echo"
+. "$FM_FAKE_SEND_RECORD_LIB"
 case "${1:-}" in
   send-keys)
     shift
@@ -83,6 +88,7 @@ case "${1:-}" in
       esac
     else
       printf '%s\n' "$payload" >> "$D/keys"
+      fm_fake_answer_ready_probe "$payload"
       case "$payload" in
         'export GOTMPDIR='*)
           if [ -n "${FM_FAKE_TRACE_PREPARE:-}" ]; then
@@ -117,6 +123,7 @@ case "${1:-}" in
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
     exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
 esac

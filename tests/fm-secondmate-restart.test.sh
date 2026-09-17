@@ -48,6 +48,11 @@ make_stub() {  # <case-dir>
 #!/usr/bin/env bash
 set -u
 D=$FM_FAKE_DIR
+# tests/fake-tmux-send-record.sh answers the launch-readiness probe; the
+# composer frame this fake renders would otherwise read as a shell that
+# renders and never executes, and the launch would be refused.
+FM_FAKE_PANE_ECHO="$D/pane-echo"
+. "$FM_FAKE_SEND_RECORD_LIB"
 case "${1:-}" in
   send-keys)
     shift
@@ -61,6 +66,7 @@ case "${1:-}" in
       esac
     done
     payload=${1:-}
+    fm_fake_answer_ready_probe "$payload"
     if [ "$literal" = 1 ]; then
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
@@ -109,7 +115,10 @@ case "${1:-}" in
       prev=$a
     done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    printf '╭────╮\n│    │\n╰────╯\n'
+    [ ! -s "$FM_FAKE_PANE_ECHO" ] || cat "$FM_FAKE_PANE_ECHO"
+    exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
 esac
 exit 0
