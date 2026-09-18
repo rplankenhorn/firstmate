@@ -39,7 +39,20 @@ COUNT_FILE="$RESP/.count"
 next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
 {
   printf 'orca'
-  for a in "$@"; do printf '\x1f%s' "$a"; done
+  for a in "$@"; do
+    # The launcher now sends a short `. '<path>'` line that sources the recorded
+    # command instead of the command itself (bin/fm-launch-send-lib.sh owns that
+    # rule). A real Orca terminal RUNS what it is handed, so a --text payload
+    # that is a source line is logged as the command the file holds.
+    case "$a" in
+    ". '"*"'")
+      p=${a#. \'}
+      p=${p%\'}
+      [ ! -f "$p" ] || a=$(cat "$p")
+      ;;
+    esac
+    printf '\x1f%s' "$a"
+  done
   printf '\n'
 } >> "$LOG"
 if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ]; then

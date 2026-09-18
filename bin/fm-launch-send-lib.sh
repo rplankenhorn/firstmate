@@ -1,6 +1,7 @@
 # shellcheck shell=bash
 # Shared launch-command delivery for a freshly created worker pane.
 # Usage: . bin/fm-launch-send-lib.sh
+#        fm_launch_reset_pane_input <send-key-fn> [<settle>]
 #        fm_launch_wait_shell_ready <send-line-fn> <capture-fn> [<polls>] [<interval>]
 #        fm_launch_command_file <path> <text>
 #        fm_launch_source_line <path>           -> the short line to type
@@ -41,6 +42,23 @@
 #     the probe line is a printf the shell must RUN to produce the marker, and
 #     the typed text carries the marker in two pieces so the echoed command line
 #     can never satisfy the match on its own.
+#     A REUSED pane is handed to fm_launch_reset_pane_input first, because the
+#     probe is evidence about the shell only once the shell can see the probe.
+#     The bytes a departed agent never consumed are still queued in its pane:
+#     the interrupt key the control plane typed at it went into a foreground
+#     process that does not read stdin, and the shell picks it up the moment
+#     that process exits. Measured 2026-09-17 against a real herdr 0.9.1 pane,
+#     with one Escape left pending exactly that way: the shell consumed the ESC
+#     that OPENS the bracketed-paste sequence wrapped around the next line, the
+#     pane received the literal `[200~printf ...~` and answered `zsh: bad
+#     pattern`, and the wait returned 1 for a shell that was reading perfectly
+#     well. The same stray byte would corrupt rule 2's source line just as
+#     thoroughly, so the reset is a delivery rule and not a softer verdict.
+#     Its refusal survives it: the same measurement left a pane holding
+#     SIGINT-ignoring work at verdict 1 after the reset, because a wedged shell
+#     still never runs the probe. A FRESH pane is never reset - nothing is
+#     queued in one yet, and interrupting a shell part-way through its startup
+#     files would cost the launch the environment those files were setting up.
 #     Its verdict has three values, because "the shell did not run my probe" and
 #     "this pane shows me nothing at all" are different facts and only the first
 #     is evidence about a shell. 0 is confirmed. 1 means the pane rendered text
@@ -78,7 +96,9 @@
 # and the same two values are the optional fourth and fifth arguments so a
 # caller that already owns a timeout policy is not forced through an env var.
 # FM_LAUNCH_READY_BLANK_POLLS is the blank bound above, in the same poll units
-# and never longer than the budget itself.
+# and never longer than the budget itself. FM_LAUNCH_RESET_SETTLE is how long
+# the reset waits for the cleared prompt to come back, and is the optional
+# second argument for the same reason.
 
 FM_LAUNCH_SEND_CHUNK_DEFAULT=512
 FM_LAUNCH_SEND_CHUNK_MAX=1024
@@ -86,6 +106,7 @@ FM_LAUNCH_SEND_PAUSE_DEFAULT=0.05
 FM_LAUNCH_READY_POLLS_DEFAULT=120
 FM_LAUNCH_READY_INTERVAL_DEFAULT=0.25
 FM_LAUNCH_READY_BLANK_POLLS_DEFAULT=40
+FM_LAUNCH_RESET_SETTLE_DEFAULT=0.3
 
 # fm_launch_chunk_size: the validated per-write byte bound. A malformed or zero
 # FM_LAUNCH_SEND_CHUNK falls back to the default rather than producing an empty
@@ -159,6 +180,24 @@ fm_launch_source_line() {
   *\'*) return 1 ;;
   esac
   printf ". '%s'" "$1"
+}
+
+# fm_launch_reset_pane_input <send-key-fn> [<settle>]: return a reused pane to
+# a fresh reading prompt before rule 1 probes it. <send-key-fn> takes one key
+# from firstmate's key vocabulary and delivers it, so every backend resets
+# through the channel it already implements. The key is the interrupt: it
+# reaches the shell along the terminal's signal path rather than its input
+# buffer, so a shell that is not reading cannot swallow the reset the way it
+# swallows typed text, it discards whatever the line editor was holding - a
+# pending escape prefix, a half-typed line, a quote continuation - without
+# submitting any of it, and it is the one key every verified backend accepts.
+# Returns the send's own status; a caller that cannot reset still has rule 1's
+# verdict to decide on.
+fm_launch_reset_pane_input() {
+  local send=$1
+  local settle=${2:-${FM_LAUNCH_RESET_SETTLE:-$FM_LAUNCH_RESET_SETTLE_DEFAULT}}
+  "$send" C-c || return 1
+  sleep "$settle"
 }
 
 # fm_launch_wait_shell_ready <send-line-fn> <capture-fn> [<polls>] [<interval>]:

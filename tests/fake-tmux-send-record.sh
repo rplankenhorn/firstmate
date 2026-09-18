@@ -18,11 +18,14 @@
 # rule is stated once here and shared.
 #
 # Recording rules:
-#  - a `-l` payload is appended RAW, with no newline, exactly as a pane receives
-#    it, so any number of chunked writes rejoin into one line;
+#  - a `-l` payload is accumulated off to the side exactly as a pane receives
+#    it, so any number of chunked writes rejoin into one line before it lands;
 #  - an invocation carrying Enter (or C-m) ends that line, and only when a
 #    literal write is actually pending, so repeated launches into one log stay
-#    one line each and no blank line is introduced;
+#    one line each and no blank line is introduced. The completed line is passed
+#    through fm_fake_expand_source_line first, so the launcher's `. '<path>'`
+#    sourcing line is recorded as the command that file holds - the command the
+#    pane's shell would actually run;
 #  - a text-line payload (`send-keys -t <target> <text> Enter`) is recorded as
 #    its own complete line only when FM_FAKE_LAUNCH_LOG_TEXT_LINES=1, because
 #    most suites assert on the launch command alone and the launcher sends its
@@ -100,10 +103,36 @@ fm_fake_print_pane_echo() {
   [ ! -s "$echo_file" ] || cat "$echo_file"
 }
 
+# fm_fake_expand_source_line <line>: a real pane shell that is handed the launch
+# line RUNS it, and the launcher now types only the short `. '<path>'` line that
+# sources the recorded command rather than the command itself
+# (bin/fm-launch-send-lib.sh owns that delivery rule). A fake that records or
+# classifies what the pane received must see what the shell would have RUN, not
+# the sourcing line, so a source line whose file exists is replaced here with
+# that file's contents - exactly the command the shell would execute. Any other
+# line, and a source line whose file is absent, is returned unchanged.
+fm_fake_expand_source_line() {
+  local line=$1 path
+  case "$line" in
+  ". '"*"'")
+    path=${line#. \'}
+    path=${path%\'}
+    if [ -f "$path" ]; then
+      # $() strips the trailing newline fm_launch_command_file appends, so the
+      # command rejoins the log as one recorded line the way a typed launch did.
+      printf '%s' "$(cat "$path")"
+      return 0
+    fi
+    ;;
+  esac
+  printf '%s' "$line"
+}
+
 # fm_fake_record_send <send-keys argument list...>
 fm_fake_record_send() {
   local log=${FM_FAKE_LAUNCH_LOG:-}
   local pending="$log.literal-pending"
+  local partial="$log.literal-line"
   local a literal=0 enter=0 skip=0
   shift # the `send-keys` word itself
   for a in "$@"; do
@@ -129,7 +158,10 @@ fm_fake_record_send() {
       literal=0
       fm_fake_buffer_literal "$a"
       if [ -n "$log" ] && [ -z "${FM_FAKE_SEND_ON_LINE:-}" ]; then
-        printf '%s' "$a" >>"$log"
+        # Accumulate the literal chunks off to the side and land them in the log
+        # only when Enter submits the line, so a source line can be expanded to
+        # the command it runs before it is recorded.
+        printf '%s' "$a" >>"$partial"
         : >"$pending"
       fi
       continue
@@ -140,8 +172,8 @@ fm_fake_record_send() {
     fi
   done
   if [ "$enter" = 1 ] && [ -n "$log" ] && [ -e "$pending" ]; then
-    printf '\n' >>"$log"
-    rm -f "$pending"
+    printf '%s\n' "$(fm_fake_expand_source_line "$(cat "$partial" 2>/dev/null)")" >>"$log"
+    rm -f "$pending" "$partial"
   fi
   [ "$enter" = 1 ] && fm_fake_flush_line
   return 0
@@ -165,5 +197,9 @@ fm_fake_flush_line() {
   line=$(cat "$FM_FAKE_SEND_BUFFER")
   : >"$FM_FAKE_SEND_BUFFER"
   [ -n "${FM_FAKE_SEND_ON_LINE:-}" ] || return 0
+  # The classifier judges the command the shell would run, so a source line is
+  # expanded to that command before it is handed over (see the launch delivery
+  # rule in fm_fake_expand_source_line above).
+  line=$(fm_fake_expand_source_line "$line")
   "$FM_FAKE_SEND_ON_LINE" "$line"
 }
