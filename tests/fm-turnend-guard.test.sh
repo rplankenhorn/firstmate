@@ -408,6 +408,75 @@ EOF
   pass "fm-turnend-guard: healthy non-Claude harness paths ignore Claude episode contention"
 }
 
+# Codex runs supervision as a BOUNDED FOREGROUND checkpoint
+# (bin/fm-watch-checkpoint.sh, docs/supervision-protocols/codex.md), so by the
+# time the model can end a turn that watcher process has already exited. The two
+# cases below pin the shape Codex actually presents at its own turn boundary -
+# work in flight, no watcher lock at all - which the healthy-path Codex row in
+# test_hook_non_claude_health_ignores_claude_budget_contention above never
+# reaches, because that case supplies a live lock no Codex turn end can have.
+#
+# Harness detection comes from real process evidence, not a stubbed detector:
+# bin/fm-harness.sh resolves a comm-strength `codex` ancestor ahead of any
+# marker, so this fake answers the FIELD-FIRST per-pid ps queries the ancestry
+# walk uses (the same shape fm_fake_blind_ancestry intercepts) and leaves every
+# other ps query on the real ps, so watcher liveness still reads real processes.
+CODEX_BIN=$(fm_fakebin "$TMP_ROOT/codex-ancestry")
+fake_codex_ancestry() {
+  local fakebin=$1 real_ps
+  real_ps=$(command -v ps) || fail "could not resolve the real ps"
+  cat > "$fakebin/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  '-o comm= -p '*) printf '%s\n' codex ;;
+  '-o args= -p '*) printf '%s\n' codex ;;
+  '-o ppid= -p '*) printf '%s\n' 1 ;;
+  *) exec "$real_ps" "\$@" ;;
+esac
+SH
+  chmod +x "$fakebin/ps"
+}
+fake_codex_ancestry "$CODEX_BIN"
+
+CODEX_REQUIRED_REASON='repair missing watcher supervision with a foreground checkpoint: bin/fm-watch-checkpoint.sh --seconds 180.'
+
+run_codex_hook() {
+  local dir=$1 home
+  home=$(cd "$dir" && pwd)
+  printf '{"cwd":"%s","stop_hook_active":false}' "$home" \
+    | env -u CLAUDECODE -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GROK_AGENT -u FM_SUPERVISION_MODEL \
+      PATH="$CODEX_BIN:$PATH" FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" 2>&1
+}
+
+test_hook_codex_checkpoint_allows_fresh_beacon_without_live_watcher() {
+  local dir model out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-codex-fresh-no-lock")
+  # shellcheck disable=SC2016 # the child shell, not this one, expands $1.
+  model=$(env -u CLAUDECODE -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GROK_AGENT -u FM_SUPERVISION_MODEL \
+    PATH="$CODEX_BIN:$PATH" bash -c '. "$1"; fm_supervision_model' _ "$dir/bin/fm-wake-lib.sh")
+  [ "$model" = checkpoint ] || fail "codex must classify as the checkpoint supervision model, got '$model'"
+  : > "$dir/state/task1.meta"
+  touch "$dir/state/.last-watcher-beat"
+  [ ! -e "$dir/state/.watch.lock" ] || fail "fixture must have no watcher lock"
+  out=$(run_codex_hook "$dir"); status=$?
+  expect_code 0 "$status" "the checkpoint model must accept a beacon fresh within grace with no live watcher"
+  [ -z "$out" ] || fail "codex turn end produced output despite a fresh checkpoint beacon: $out"
+  pass "fm-turnend-guard: codex checkpoint model allows a fresh beacon with no live watcher"
+}
+
+test_hook_codex_checkpoint_blocks_stale_beacon_without_live_watcher() {
+  local dir out status
+  dir=$(make_primary_dir "$TMP_ROOT/hook-codex-stale-no-lock")
+  : > "$dir/state/task1.meta"
+  touch -t 202001010000 "$dir/state/.last-watcher-beat"
+  [ ! -e "$dir/state/.watch.lock" ] || fail "fixture must have no watcher lock"
+  out=$(run_codex_hook "$dir"); status=$?
+  expect_code 2 "$status" "the checkpoint model must still block once the beacon passes grace"
+  assert_contains "$out" "TURN WOULD END BLIND" "expected the supervision-off banner"
+  assert_contains "$out" "$CODEX_REQUIRED_REASON" "block reason must name the codex checkpoint repair"
+  pass "fm-turnend-guard: codex checkpoint model blocks a stale beacon with no live watcher"
+}
+
 test_hook_blocks_with_live_lock_and_stale_beacon() {
   local dir pid identity out status
   dir=$(make_primary_dir "$TMP_ROOT/hook-live-lock-stale")
@@ -2217,6 +2286,8 @@ test_hook_blocks_source_only_home
 test_hook_blocks_when_dead_lock_has_fresh_beacon
 test_hook_silent_with_live_lock_and_fresh_beacon
 test_hook_non_claude_health_ignores_claude_budget_contention
+test_hook_codex_checkpoint_allows_fresh_beacon_without_live_watcher
+test_hook_codex_checkpoint_blocks_stale_beacon_without_live_watcher
 test_hook_blocks_with_live_lock_and_stale_beacon
 test_hook_blocks_when_unhealthy_in_primary
 test_hook_blocks_from_fm_home_state

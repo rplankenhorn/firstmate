@@ -13,6 +13,11 @@ Usage: fm-watch-checkpoint.sh [--seconds <n>]
 Run bin/fm-watch.sh in the foreground for a bounded checkpoint.
 On an actionable watcher wake, pass through the watcher output and exit 0.
 On a quiet checkpoint, print "checkpoint: no actionable wake within <n>s" and exit 124.
+When a background watcher already holds the lock, print
+"checkpoint: watcher is already running outside this foreground checkpoint" and exit 1.
+When the lock is held by a live pid whose heartbeat is stale or missing - a wedged
+watcher - print "checkpoint: WEDGED watcher holds the lock ..." naming
+bin/fm-watch-arm.sh --restart, and exit 1.
 EOF
 }
 
@@ -97,6 +102,22 @@ if grep -E '^(signal:|stale:|check:|heartbeat($|:))' "$OUT" >/dev/null 2>&1; the
   cat "$OUT"
   [ ! -s "$ERR" ] || cat "$ERR" >&2
   exit 0
+fi
+
+# A WEDGED watcher: bin/fm-watch.sh refuses to re-arm when the lock is held by a
+# live pid whose heartbeat is stale or absent, and that refusal is exactly the
+# diagnosis the operator needs. Both of its spellings share this prefix. Without
+# this arm the refusal fell through to the bare `exit "$RC"` below with the
+# message buried on stderr, so a genuinely wedged watcher - the one case a
+# checkpoint can neither fix nor wait out - looked like an unexplained failure.
+# Surface it as its own outcome naming the repair, ahead of the "already running"
+# test, because a wedged lock is also "held" and must not be reported as healthy
+# contention.
+if grep -E '^watcher: lock held by live pid ' "$OUT" "$ERR" >/dev/null 2>&1; then
+  [ ! -s "$OUT" ] || cat "$OUT"
+  [ ! -s "$ERR" ] || cat "$ERR" >&2
+  echo "checkpoint: WEDGED watcher holds the lock - its heartbeat is stale or missing, so this checkpoint cannot run; inspect that watcher, then restart it with bin/fm-watch-arm.sh --restart" >&2
+  exit 1
 fi
 
 if grep -E '^watcher: already running' "$OUT" "$ERR" >/dev/null 2>&1; then

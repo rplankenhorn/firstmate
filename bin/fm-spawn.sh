@@ -4327,8 +4327,13 @@ if [ "$KIND" = secondmate ]; then
   # Pi and pi-signed secondmates previously received persistent here and now
   # receive extension to match fm_supervision_model's own table, so their pull
   # guard tolerates the extension hand-off exactly as a Pi primary does.
+  # This value OVERRIDES detection in the secondmate's own home, so a stale row
+  # here is not a cosmetic mismatch: codex received persistent until its
+  # checkpoint model existed, which forced that home back onto the strict
+  # turn-end predicate its bounded foreground checkpoint can never satisfy.
   case "$HARNESS" in
   claude | cursor) supervision_model=autoarm ;;
+  codex) supervision_model=checkpoint ;;
   pi | pi-signed | omp) supervision_model=extension ;;
   *) supervision_model=persistent ;;
   esac

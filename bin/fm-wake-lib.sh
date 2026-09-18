@@ -191,25 +191,36 @@ fm_watcher_healthy() {
 #               watcher process is healthy, and a stale beacon is still healthy
 #               while a Claude auto-arm generation explains the gap
 #               (fm_autoarm_midturn_healthy).
+#   checkpoint  codex: supervision is a BOUNDED FOREGROUND checkpoint
+#               (bin/fm-watch-checkpoint.sh, docs/supervision-protocols/codex.md),
+#               so the watcher process has already exited before the turn can end
+#               and no live pid is reachable at that boundary. The model means "a
+#               checkpoint ran within grace"; the turn-end guard accepts a fresh
+#               beacon with no live watcher on that basis, the same tolerance
+#               autoarm gets. It is NOT autoarm: autoarm's mid-turn tolerance
+#               (fm_autoarm_midturn_healthy) is Claude-ledger-specific, and a
+#               checkpoint home mid-turn is inside its own foreground watcher, so
+#               mid-turn it keeps the strict persistent semantics.
 #   extension   Pi (and pi-signed): .pi/extensions/fm-primary-pi-watch.ts owns
 #               continuity. It tears the watcher down on every actionable wake and
 #               spawns the replacement itself, so a genuinely unheld singleton lock
 #               is healthy during that hand-off only with extension ownership and a
 #               fresh beacon. Any held but unhealthy lock remains down.
-#   persistent  every other harness (codex foreground checkpoint, opencode/grok
-#               background arm, tmux, unknown): the watcher runs as a tracked live
-#               process, so a live identity-matched pid is the real liveness signal.
+#   persistent  every other harness (opencode/grok background arm, tmux, unknown):
+#               the watcher runs as a tracked live process, so a live
+#               identity-matched pid is the real liveness signal.
 # FM_SUPERVISION_MODEL overrides detection (tests, and callers that already know
 # the harness). Otherwise bin/fm-harness.sh is the single detection owner, so this
 # stays consistent with the harness-specific repair line the guards already emit.
 fm_supervision_model() {
   local harness
   case "${FM_SUPERVISION_MODEL:-}" in
-    autoarm|extension|persistent) printf '%s\n' "$FM_SUPERVISION_MODEL"; return 0 ;;
+    autoarm|checkpoint|extension|persistent) printf '%s\n' "$FM_SUPERVISION_MODEL"; return 0 ;;
   esac
   harness=$("$FM_WAKE_LIB_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
   case "$harness" in
     claude|cursor) printf 'autoarm\n' ;;
+    codex) printf 'checkpoint\n' ;;
     pi|pi-signed|omp) printf 'extension\n' ;;
     *) printf 'persistent\n' ;;
   esac
@@ -376,6 +387,11 @@ fm_afk_mode() {
 # extension never restores still alarms once the beacon passes grace.
 # persistent: require a live identity-matched watcher with a fresh beacon
 # (fm_watcher_healthy); a fresh leftover beacon with no live watcher is still down.
+# checkpoint: identical to persistent HERE and deliberately so. This verdict is
+# mid-turn, and a codex home mid-turn is inside its own foreground checkpoint with
+# a real watcher process on the lock, so the strict signal is the right one. Only
+# the TURN-END boundary, which the checkpoint has by construction already left,
+# gets the fresh-beacon tolerance (bin/fm-turnend-guard.sh).
 # shellcheck disable=SC2034 # Read by callers after the function returns.
 FM_WATCHER_VERDICT_OK=false
 # shellcheck disable=SC2034 # Read by callers after the function returns.
