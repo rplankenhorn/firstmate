@@ -43,11 +43,12 @@ When the guard acts, the harness integration must do one of two things:
 - Block the turn end.
 - Force one bounded follow-up that uses the recovery instruction from the emitted session-start protocol.
 
-The mid-turn pull warning uses the model-aware supervision verdict described below, while the turn-end guard keeps the PID-strict watcher predicate.
+The mid-turn pull warning uses the model-aware supervision verdict described below, and the turn-end guard keeps the PID-strict watcher predicate wherever a watcher process can still be holding the lock when the turn ends.
+Two supervisors are accepted in its place, each because no such process exists at that boundary by construction rather than by tolerance.
 
-Away and quiet mode are the one place the turn-end guard accepts a different supervisor.
-While `state/.afk` exists, in either mode (`bin/fm-wake-lib.sh`'s `fm_afk_mode`), the daemon owns supervision.
+Away and quiet mode are the first: while `state/.afk` exists, in either mode (`bin/fm-wake-lib.sh`'s `fm_afk_mode`), the daemon owns supervision.
 A live identity-matched daemon with a fresh beacon then satisfies that boundary in place of a watcher process holding the lock.
+The `checkpoint` model is the second: its supervision is a bounded foreground checkpoint that has already exited before the model can end a turn, so a beacon fresh within grace satisfies that boundary with no live watcher, and a beacon past grace still blocks.
 
 The guard remains a backstop.
 [`watcher-continuity.md`](watcher-continuity.md) owns normal continuity.
@@ -93,6 +94,7 @@ Under that check:
 The turn-end guard needs that strict check because it fires at the turn boundary.
 At that boundary the auto-arm is bringing a fresh watcher up for the upcoming idle period.
 The guard cooperates with that arm rather than trusting a beacon left by the cycle that just ended.
+The `checkpoint` model is the one supervision model exempt from it, because there is no such arm to cooperate with: a bounded foreground checkpoint must exit before the model regains control, so demanding a live pid there was unsatisfiable rather than strict, and the guard accepts a beacon fresh within grace instead.
 
 ### Foreign session-lock owner
 
@@ -165,6 +167,7 @@ A cycle the extension never restores is loud once the beacon passes grace.
 #### Persistent-watcher harnesses
 
 Under every persistent-watcher harness a live identity-matched watcher with a fresh beacon is still required, so the pull guard keeps the same strict semantics there.
+The `checkpoint` model keeps those strict pull semantics too, and deliberately: a checkpoint home mid-turn is inside its own foreground checkpoint with a real watcher process on the lock, so only the turn-end boundary the checkpoint has already left gets the fresh-beacon tolerance.
 Its banner names the true failing condition, either a missing live watcher process or a genuinely stale beacon with its real age.
 It keys the once-per-episode dedup on that condition rather than the beacon mtime.
 
@@ -267,6 +270,7 @@ The registrations in detail:
 
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
+  Codex is the `checkpoint` supervision model, so that guard accepts a beacon fresh within grace with no live watcher: its supervision is the bounded foreground checkpoint `bin/fm-watch-checkpoint.sh` ([`supervision-protocols/codex.md`](supervision-protocols/codex.md)), which has exited before the turn can end.
 - OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
 - Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
 - omp answers its blocking `session_stop` hook in `.omp/extensions/fm-primary-turnend-guard.ts`, passing the payload's own `stop_hook_active` to the shared guard.
@@ -554,6 +558,7 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Generation and legacy claim cases that must block or clear instead of allowing a blind stop.
 - Away-mode daemon ownership between watcher cycles and over a watcher lock left behind by an exited watcher, plus its dead, pid-reused, absent, stale-beacon, and away-mode-off negatives.
 - The away-mode beacon's poll-derived grace widening for a live daemon still mid-cycle and its bound against a dead daemon, a beacon older than that wider grace, and FM_POLL's inapplicability with away mode off.
+- The `checkpoint` model's Codex-shaped turn boundary over real ancestry evidence, accepting a fresh beacon with no watcher lock and still blocking once that beacon passes grace.
 - Pi logical-run latching.
 - Missing-`jq` behavior.
 - All five primary registrations.
