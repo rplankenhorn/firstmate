@@ -32,8 +32,17 @@ FM_FAKE_PANE_ECHO="$FM_FAKE_TMUX_CAPTURE.echo"
 . "$FM_FAKE_SEND_RECORD_LIB"
 case "${1:-}" in
   has-session|new-session|new-window|send-keys|kill-window)
-    printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
-    for fake_arg in "$@"; do fm_fake_answer_ready_probe "$fake_arg"; done
+    # The launcher types a short `. '<path>'` line that sources the recorded
+    # command rather than the command itself (bin/fm-launch-send-lib.sh owns that
+    # rule), so a source-line payload is logged as the command the shell would
+    # run - what this suite's launch assertions inspect.
+    fake_line=
+    for fake_arg in "$@"; do
+      fm_fake_answer_ready_probe "$fake_arg"
+      fake_arg=$(fm_fake_expand_source_line "$fake_arg")
+      fake_line="${fake_line:+$fake_line }$fake_arg"
+    done
+    printf '%s\n' "$fake_line" >> "$FM_FAKE_TMUX_LOG"
     exit 0
     ;;
   list-windows)

@@ -68,6 +68,13 @@ case "${1:-}" in
     payload=${1:-}
     fm_fake_answer_ready_probe "$payload"
     if [ "$literal" = 1 ]; then
+      # The launcher types a short `. '<path>'` line that sources the recorded
+      # command rather than the command itself (bin/fm-launch-send-lib.sh owns
+      # that rule). A real pane RUNS what it is handed, so expand a source line
+      # to the command the file holds before recording or classifying it - the
+      # command this fake's launch detection and the suite's literal assertions
+      # both read.
+      payload=$(fm_fake_expand_source_line "$payload")
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
         /exit|/quit)

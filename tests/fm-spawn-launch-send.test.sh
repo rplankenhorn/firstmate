@@ -163,8 +163,12 @@ fm_launch_command_file "$cmd_file" "z=$payload_ascii" ||
   fail "fm_launch_command_file reported a failure"
 [ "$(cat "$cmd_file")" = "z=$payload_ascii" ] ||
   fail "the recorded launch command did not come back byte-for-byte"
-# BSD stat first, GNU stat second: both supported platforms answer one of them.
-mode=$(stat -f '%OLp' "$cmd_file" 2>/dev/null || stat -c '%a' "$cmd_file")
+# GNU stat first, BSD stat second: both supported platforms answer one of them.
+# GNU-first is the safe order because a wrong -c on BSD stat is a clean
+# illegal-option failure, whereas a wrong -f on GNU stat is read as
+# --file-system and prints a filesystem dump for the real file, so a BSD-first
+# probe returns that dump (plus a nonzero status) instead of the mode on Linux.
+mode=$(stat -c '%a' "$cmd_file" 2>/dev/null || stat -f '%OLp' "$cmd_file")
 [ "$mode" = 600 ] ||
   fail "the recorded launch command must be private to its owner, got mode $mode"
 # A nested destination is created rather than refused, so a caller is free to

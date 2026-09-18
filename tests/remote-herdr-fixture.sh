@@ -38,7 +38,23 @@ SEND_FAIL='$send_fail'
 SOCKET='$socket'
 SH
   cat >> "$script" <<'SH'
-printf '%s\n' "$*" >> "$LOG"
+# The launcher hands the pane a short `. '<path>'` line that sources the recorded
+# command rather than the command itself (bin/fm-launch-send-lib.sh owns that
+# rule). A real pane RUNS what it is handed, so a source-line argument is logged
+# as the command the file holds - what these suites read back to assert on the
+# launch. Any other argument is logged verbatim.
+fm_log_line=
+for fm_arg in "$@"; do
+  case "$fm_arg" in
+  ". '"*"'")
+    fm_path=${fm_arg#. \'}
+    fm_path=${fm_path%\'}
+    [ ! -f "$fm_path" ] || fm_arg=$(cat "$fm_path")
+    ;;
+  esac
+  fm_log_line="${fm_log_line:+$fm_log_line }$fm_arg"
+done
+printf '%s\n' "$fm_log_line" >> "$LOG"
 jq_state() { jq "$@" "$STATE"; }
 save() { tmp="$STATE.tmp.$$"; cat > "$tmp" && mv "$tmp" "$STATE"; }
 ws=""; label=""; cwd=""; pane=""
