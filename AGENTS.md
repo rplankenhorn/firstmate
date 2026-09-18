@@ -236,6 +236,9 @@ Do not add model-specific versions of that policy.
 Dispatch only on a backend that `fm-spawn` validates as spawn-capable; pass an explicit per-spawn `--backend` only under that exact task's own authority, never as later-task precedent (selection contract: [`docs/configuration.md`](docs/configuration.md) "Runtime backend").
 A missing dependency, authentication failure, unsupported backend, or version refusal is a blocker; never silently retry on another backend.
 
+Non-interactive harnesses such as Codex do not inherit the operator's interactive shell credentials, so any brief that calls a 1Password-backed CLI tool must include the explicit `op run --env-file=<path> --` wrapper rather than relying on ambient credentials.
+Consult that tool's own skill for the exact command and env-file path.
+
 ## 5. Recovery
 
 After the one session-start digest, reconcile reality with durable records before taking new work.
