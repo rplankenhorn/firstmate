@@ -236,7 +236,11 @@ test_spawn_tmux_and_fakebin() {
   [ -z "$out" ] || fail "spawn tmux pane path should default to empty, got '$out'"
   out=$("$fakebin/tmux" display-message -p '#S')
   [ "$out" = firstmate ] || fail "spawn tmux session name should be firstmate, got '$out'"
-  FM_FAKE_LAUNCH_LOG="$log" "$fakebin/tmux" send-keys -t @w -l 'codex --yolo'
+  # The recorder lands a literal write in the log only when Enter submits the
+  # line, matching the real launcher (a chunked `-l` write then a separate
+  # Enter, bin/fm-launch-send-lib.sh + bin/fm-spawn.sh), so the payload rejoins
+  # as one line however it was chunked.
+  FM_FAKE_LAUNCH_LOG="$log" "$fakebin/tmux" send-keys -t @w -l 'codex --yolo' Enter
   assert_grep 'codex --yolo' "$log" "send-keys -l payload was not logged"
   [ -x "$fakebin/treehouse" ] || fail "spawn fakebin should include treehouse"
   [ -x "$fakebin/gh-axi" ] || fail "extra exit-0 tools should land in the spawn fakebin"

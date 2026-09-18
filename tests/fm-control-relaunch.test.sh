@@ -1656,7 +1656,14 @@ test_spawn_relaunch_refuses_a_pane_outside_the_worktree() {
   out=$(run_spawn "$dir" rl18 --relaunch --harness claude); rc=$?
   expect_code 1 "$rc" "a pane outside the worktree should refuse"
   assert_contains "$out" "not its recorded worktree" "the refusal should name the wrong location"
-  [ ! -s "$dir/fake/keys" ] || fail "a refused tmux relaunch must send nothing to the pane"
+  [ -z "$(cat "$dir/fake/literal")" ] \
+    || fail "a refused tmux relaunch must deliver no launch command to the pane"
+  # Every relaunch clears a reused pane's stray input before it inspects the
+  # pane (bin/fm-spawn.sh drives fm_launch_reset_pane_input), so the one thing a
+  # refusal past that point has typed is that benign interrupt reset - never a
+  # launch, a re-home, or anything else.
+  [ "$(cat "$dir/fake/keys")" = C-c ] \
+    || fail "a refused tmux relaunch must send only the input reset, got: $(cat "$dir/fake/keys")"
   pass "fm-spawn --relaunch: refuses to start a replacement outside the copy holding its work"
 }
 
