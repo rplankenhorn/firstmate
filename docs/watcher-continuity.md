@@ -445,6 +445,7 @@ It also checks that a newly appended keyed decision is classified without reread
 - The typed self-eviction failure.
 - Bounded and successor-linked lifecycle rows.
 - A SIGSTOP counterfactual that distinguishes a live PID from a stale beacon before classifying termination.
+- Reclaiming a stale `.steal` chain in place without consulting or creating a deeper level. This bounded, non-recursive path prevents the fork-stack overflow that previously segfaulted the watcher during process-event reconcile.
 
 ### Claude auto-arm and turn-end guard
 
