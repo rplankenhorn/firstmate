@@ -4691,4 +4691,51 @@ PATH="$UNDISP/bin:$PATH" FM_HOME="$UNDISP/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$undisp_art" >/dev/null 2>&1 || true
 pass "arm does not launch beside a stale claim whose process group is alive"
 
+# --- reconcile survives a stale steal chain on a source lock ----------------
+# The crash this guards: reconcile acquires each source lock through
+# fm_lock_acquire_wait, and a stale steal mutex on that lock used to be
+# reclaimed by recursing into a nested ".steal.steal" lock, which recursed into
+# ".steal.steal.steal", and so on. Under contention that chain grew without
+# bound until a stack-bounded bash fork overflowed and segfaulted the watcher
+# mid-reconcile. Here the source lock and two steal levels are dead-pid stale
+# debris - what the affected home carried - with a LIVE holder at the third
+# level as a tripwire. The old recursion descended to it, refused the reclaim,
+# and spun fm_lock_acquire_wait forever, so a bounded exit that reclaims the
+# source lock proves the fix without ever consulting the live third level.
+HSTEAL="$TMP_ROOT/reconcile-stale-steal"; new_home "$HSTEAL"
+STEAL_TRIG="$TMP_ROOT/reconcile-stale-steal-trigger"
+pe_register "$HSTEAL" lavish steal-recurse-src -- "$BLOCKER" "$STEAL_TRIG" "steal payload" >/dev/null
+STEAL_LOCK="$FM_PROCEVENT_CLAIM_ROOT/steal-recurse-src.lock"
+mkdir -p "$FM_PROCEVENT_CLAIM_ROOT"
+# A dead pid the reclaimer will find across the primary lock and both stale
+# steal levels. Spawn, reap, then reuse its now-free pid so nothing live holds it.
+sleep 0.01 & STEAL_DEAD=$!; wait "$STEAL_DEAD" 2>/dev/null || true
+while kill -0 "$STEAL_DEAD" 2>/dev/null; do sleep 0.02; done
+mkdir "$STEAL_LOCK"; printf '%s\n' "$STEAL_DEAD" > "$STEAL_LOCK/pid"
+mkdir "$STEAL_LOCK.steal"; printf '%s\n' "$STEAL_DEAD" > "$STEAL_LOCK.steal/pid"
+mkdir "$STEAL_LOCK.steal.steal"; printf '%s\n' "$STEAL_DEAD" > "$STEAL_LOCK.steal.steal/pid"
+sleep 300 & STEAL_LIVE=$!
+mkdir "$STEAL_LOCK.steal.steal.steal"; printf '%s\n' "$STEAL_LIVE" > "$STEAL_LOCK.steal.steal.steal/pid"
+FM_LOCK_STALE_AFTER=0 pe "$HSTEAL" reconcile >/dev/null 2>&1 &
+STEAL_RECONCILE_PID=$!
+steal_deadline=$((SECONDS + 15))
+while kill -0 "$STEAL_RECONCILE_PID" 2>/dev/null; do
+  if [ "$SECONDS" -ge "$steal_deadline" ]; then
+    kill -KILL "$STEAL_RECONCILE_PID" 2>/dev/null || true
+    kill "$STEAL_LIVE" 2>/dev/null || true
+    fail "reconcile did not exit within its bound on a stale steal chain (recursion regressed)"
+  fi
+  sleep 0.1
+done
+STEAL_LIVE_STILL=$(cat "$STEAL_LOCK.steal.steal.steal/pid" 2>/dev/null || true)
+kill "$STEAL_LIVE" 2>/dev/null || true
+wait "$STEAL_LIVE" 2>/dev/null || true
+wait_for "$FM_PROCEVENT_CLAIM_ROOT/steal-recurse-src.claim" \
+  || fail "reconcile never reclaimed the source lock past the stale steal chain"
+[ "$STEAL_LIVE_STILL" = "$STEAL_LIVE" ] \
+  || fail "reconcile disturbed the live deeper steal level on a source lock: got '$STEAL_LIVE_STILL'"
+{ [ ! -e "$STEAL_LOCK.steal.steal.steal.steal" ] && [ ! -L "$STEAL_LOCK.steal.steal.steal.steal" ]; } \
+  || fail "reconcile formed a still-deeper nested steal path on a source lock"
+pass "reconcile reclaims a stale steal chain in bounded time without a deeper steal level"
+
 printf '\nall procevent tests passed\n'

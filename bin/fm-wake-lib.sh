@@ -935,6 +935,73 @@ fm_recovery_marker_reopen_announced() {
   fm_recovery_transition "$1" reopen-announced
 }
 
+# Acquire a lock's ".steal" sibling without ever opening a further steal level.
+# The steal lock only serializes the brief primary-lock reclaim below, and its
+# atomic symlink create is itself the mutex, so it never needs its own
+# stale-owner recovery through a nested ".steal.steal". Recovering a stale steal
+# lock by recursing into fm_lock_try_acquire is what produced the unbounded
+# ".steal.steal.steal..." chain that overflowed bash's fork stack and segfaulted
+# the watcher during process-event reconcile.
+#
+# Two things can refuse the atomic create, and both are handled in place,
+# bounded, and non-recursively:
+#   1. A ".steal" that already exists. A live foreign holder is a genuine
+#      concurrent stealer and we yield to it; a dead, dangling, or self-abandoned
+#      one is broken in place and the create retried once.
+#   2. fm_lock_claim's guard against a ".steal.steal" sibling. Nothing creates
+#      that path any more, so any that exists is debris from the old recursive
+#      reclaim (a home carrying it must not wedge on it). Yield only to a live
+#      holder - an unpatched peer still mid-reclaim - and otherwise break that
+#      one deeper level in place so the create can claim. We never claim or
+#      recurse into it, so any still-deeper debris below it is left inert.
+fm_lock_try_acquire_steal() {
+  local steal=$1 nested current pid attempts=0
+  fm_current_pid current || return 1
+  nested="$steal.steal"
+  while :; do
+    if fm_lock_try_create "$steal"; then
+      return 0
+    fi
+    if [ -e "$steal" ] || [ -L "$steal" ]; then
+      pid=$(cat "$steal/pid" 2>/dev/null || true)
+      # A live holder that is not this very process is a genuine concurrent
+      # stealer: yield rather than break its lock.
+      if [ -n "$pid" ] && [ "$pid" != "$current" ] && fm_pid_alive "$pid"; then
+        FM_LOCK_OWNER_DIR=
+        return 1
+      fi
+      # A just-created lock whose pid is not yet observable is a fresh
+      # mid-acquire by a peer: do not race it.
+      if fm_lock_mid_acquire_is_fresh "$steal" "$pid"; then
+        FM_LOCK_OWNER_DIR=
+        return 1
+      fi
+    fi
+    attempts=$((attempts + 1))
+    if [ "$attempts" -ge 2 ]; then
+      FM_LOCK_OWNER_DIR=
+      return 1
+    fi
+    # Clear a ".steal.steal" that is blocking the claim: yield to a live holder,
+    # otherwise break that one deeper level in place. Never recurse into it.
+    if [ -e "$nested" ] || [ -L "$nested" ]; then
+      pid=$(cat "$nested/pid" 2>/dev/null || true)
+      if [ -n "$pid" ] && [ "$pid" != "$current" ] && fm_pid_alive "$pid"; then
+        FM_LOCK_OWNER_DIR=
+        return 1
+      fi
+      if fm_lock_mid_acquire_is_fresh "$nested" "$pid"; then
+        FM_LOCK_OWNER_DIR=
+        return 1
+      fi
+      fm_lock_remove_path "$nested" || true
+    fi
+    # Dead owner, dangling symlink, or a frame this process abandoned: break it
+    # in place, then retry the atomic create exactly once.
+    fm_lock_remove_path "$steal" || true
+  done
+}
+
 fm_lock_try_acquire() {
   local lockdir=$1 pid steal cur rc steal_owner primary_owner current
   FM_LOCK_HELD_PID=
@@ -973,7 +1040,7 @@ fm_lock_try_acquire() {
   fi
 
   steal="$lockdir.steal"
-  if ! fm_lock_try_acquire "$steal"; then
+  if ! fm_lock_try_acquire_steal "$steal"; then
     FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
     FM_LOCK_OWNER_DIR=
     return 1
