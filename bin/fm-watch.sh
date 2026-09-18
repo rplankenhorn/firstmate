@@ -2653,6 +2653,17 @@ EOF
     fi
   fi
 
+  # Second liveness-beacon touch of the cycle, immediately before the terminal
+  # wait, completing the once-per-cycle contract documented at the top of this
+  # file and in docs/turnend-guard.md. With only the top-of-cycle touch, a
+  # healthy cycle's beacon aged by the cycle BODY plus the wait, and the cycle
+  # body has no time bound at all - so the max(300, FM_POLL + 60) grace was
+  # bounding something it could not actually bound. Touching here makes a
+  # healthy cycle's beacon age bounded by the wait, which is what that formula
+  # assumes, and leaves a stalled cycle body as the thing that goes stale - the
+  # signal the guards actually want.
+  touch "$STATE/.last-watcher-beat"
+
   # Terminal wait: a bounded native-event wait for push-capable homes (herdr),
   # else the blind poll sleep. See event_wait_or_sleep.
   event_wait_or_sleep
