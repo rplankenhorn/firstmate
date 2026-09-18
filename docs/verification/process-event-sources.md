@@ -207,6 +207,7 @@ The healthy-runner case requires the attached `start` to return status 143 (TERM
 Two cases pin the guard's own numbers rather than only its outcome: one reaps an orphaned listener within the lease term plus a single check interval, with the lease expiry deliberately placed late in that interval, and one fails exactly one lease read against a home that is still alive and requires the runner to survive it.
 They fail for opposite reasons, which is the point of keeping them apart.
 The crashed-leader cases separately pin refusal and claim preservation when a leader dies outside the stop's own signal, so successful escalation cannot be mistaken for closing that limit.
+A further case pins reconcile against a stale `.steal` chain on a source lock: with the primary lock and two steal levels dead-pid stale and a live holder at the third as a tripwire, reconcile reclaims the source lock in bounded time without disturbing the live level or forming a deeper one, proving the steal-lock reclaim is non-recursive after the fork-stack overflow that used to segfault the watcher mid-reconcile was removed.
 Refresh the regressions with `bash tests/fm-procevent.test.sh`; the dated measurements above are recorded observations, not fixed timing thresholds.
 
 ## Portability finding
