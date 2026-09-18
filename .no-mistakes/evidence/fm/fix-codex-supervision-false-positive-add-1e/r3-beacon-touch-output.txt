@@ -1,0 +1,30 @@
+=== running real fm-watch.sh for ~22s (FM_POLL=5) ===
+watcher still alive after 2.5s (good)
+--- watch.err ---
+--- watch.out (head) ---
+--- perl check ---
+1789768981.548
+=== beacon touches (epoch  event  argv) ===
+1789768957.039 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768957.569 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768962.771 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768963.622 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768968.830 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768969.678 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768974.882 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+1789768975.971 beat-touch /private/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T/r3-beacon.ffaX6Y/r3cycle/state/.last-watcher-beat
+
+=== gap analysis (FM_POLL=5) ===
+  short gap (<1.5s) = top + pre-wait touch in the SAME cycle (the R3 fix)
+  long gap  (~5s)   = the terminal poll wait between cycles
+  one-touch-per-cycle would show ONLY ~5s gaps, never a short gap.
+  gap 0.530s  <-- within-cycle pair (pre-wait touch fired)
+  gap 5.202s  <-- poll wait
+  gap 0.851s  <-- within-cycle pair (pre-wait touch fired)
+  gap 5.208s  <-- poll wait
+  gap 0.848s  <-- within-cycle pair (pre-wait touch fired)
+  gap 5.204s  <-- poll wait
+  gap 1.089s  <-- within-cycle pair (pre-wait touch fired)
+total beacon touches: 8
+within-cycle pairs: 4   poll-wait gaps: 3
+RESULT: PASS - second (pre-wait) touch observed at runtime

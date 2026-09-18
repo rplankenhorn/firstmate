@@ -1,0 +1,11 @@
+=== drive fm_backend_herdr_cli against a WEDGED herdr, bound=2s ===
+elapsed=2s  rc=124  (expect rc=124, elapsed~2s)
+--- combined output ---
+herdr: no response within 2s (herdr status) - the herdr server is unresponsive or wedged
+
+=== bound computation (malformed/non-positive falls back to 30) ===
+abc -> 30
+0   -> 30
+-5  -> 30
+7   -> 7
+unset -> 30
