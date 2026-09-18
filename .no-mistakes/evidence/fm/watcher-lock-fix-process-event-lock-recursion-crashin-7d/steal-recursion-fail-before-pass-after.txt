@@ -1,0 +1,14 @@
+=== Stale steal-chain reclaim: same seeded shape, base vs fixed lib ===
+Shape: primary lock + .steal + .steal.steal all DEAD-pid stale; LIVE holder at .steal.steal.steal (tripwire).
+
+[BASE 0a5017a (pre-fix, recursive)] wrapper_exit=0 (124=hang,139=segv) live_seed=81290
+rc=1
+primary_pid_now=81286
+live_level3_pid=81290
+deeper_level_exists=no
+
+[FIXED 8320e8b (bounded fm_lock_try_acquire_steal)] wrapper_exit=0 (124=hang,139=segv) live_seed=81437
+rc=0
+primary_pid_now=81442
+live_level3_pid=81437
+deeper_level_exists=no
