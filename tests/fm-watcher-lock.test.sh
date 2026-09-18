@@ -424,6 +424,61 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
   pass "paused mid-acquire claimant backs off to active stealer"
 }
 
+test_lock_stale_steal_mutex_does_not_recurse() {
+  # A stale steal mutex must be reclaimed in place, never by recursing into the
+  # nested ".steal.steal" lock. The old fm_lock_try_acquire recovered a stale
+  # steal lock by calling itself on "$lockdir.steal", which reclaimed a stale
+  # ".steal.steal" by recursing into ".steal.steal.steal", and so on - the
+  # unbounded chain that overflowed bash's fork stack and segfaulted the watcher
+  # during process-event reconcile.
+  #
+  # Shape: the primary lock and two levels of steal debris are all dead-pid
+  # stale locks, exactly what a home carries after the old bug ran. A LIVE
+  # holder sits at ".steal.steal.steal" as a tripwire the bounded fix must never
+  # consult. The old recursion descended to that third level, found it alive,
+  # refused, and so failed to reclaim a genuinely stale primary lock (rc=1). The
+  # bounded fix breaks the two dead debris levels in place and reclaims the
+  # primary lock (rc=0) without ever touching the live third level.
+  local dir state lockdir dead live out rc newpid livepid
+  dir=$(make_case lock-stale-steal-nonrecursive)
+  state="$dir/state"
+  lockdir="$state/.contend.lock"
+  dead=$(dead_pid)
+  mkdir "$lockdir"; printf '%s\n' "$dead" > "$lockdir/pid"
+  mkdir "$lockdir.steal"; printf '%s\n' "$dead" > "$lockdir.steal/pid"
+  mkdir "$lockdir.steal.steal"; printf '%s\n' "$dead" > "$lockdir.steal.steal/pid"
+  sleep 300 &
+  live=$!
+  mkdir "$lockdir.steal.steal.steal"
+  printf '%s\n' "$live" > "$lockdir.steal.steal.steal/pid"
+
+  out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    if fm_lock_try_acquire "$2"; then rc=0; else rc=1; fi
+    printf "rc=%s newpid=%s\n" "$rc" "$(cat "$2/pid" 2>/dev/null || true)"
+  ' _ "$LIB" "$lockdir")
+
+  case "$out" in
+    *"rc=0"*) ;;
+    *) kill "$live" 2>/dev/null || true; wait "$live" 2>/dev/null || true
+       fail "stale primary lock was not reclaimed through the bounded steal path: $out" ;;
+  esac
+  newpid=${out#*newpid=}; newpid=${newpid%% *}
+  { [ -n "$newpid" ] && [ "$newpid" != "$dead" ]; } \
+    || { kill "$live" 2>/dev/null || true; wait "$live" 2>/dev/null || true
+         fail "primary lock pid was not replaced by the reclaimer: $out"; }
+  # The bounded fix never consults the deeper steal level, so the live tripwire
+  # is left exactly as seeded and no further level is ever formed.
+  livepid=$(cat "$lockdir.steal.steal.steal/pid" 2>/dev/null || true)
+  kill "$live" 2>/dev/null || true
+  wait "$live" 2>/dev/null || true
+  [ "$livepid" = "$live" ] \
+    || fail "acquire disturbed the live deeper steal level (recursed into it): got '$livepid'"
+  { [ ! -e "$lockdir.steal.steal.steal.steal" ] && [ ! -L "$lockdir.steal.steal.steal.steal" ]; } \
+    || fail "acquire formed a still-deeper nested steal path"
+  pass "a stale steal chain is reclaimed in place without recursing into a deeper steal level"
+}
+
 test_watch_restart_rejects_reused_pid() {
   local dir state fakebin out live pid i
   dir=$(make_case restart-reused-pid)
@@ -1124,6 +1179,7 @@ test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
 test_lock_paused_mid_acquire_claim_fails_during_steal
+test_lock_stale_steal_mutex_does_not_recurse
 test_watch_restart_rejects_reused_pid
 test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover
