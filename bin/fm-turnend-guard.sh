@@ -198,6 +198,21 @@ if fm_watcher_healthy "$STATE" "$WATCH" "$GRACE" "$FM_HOME"; then
   allow_supervised_stop
 fi
 
+# The CHECKPOINT supervision model (codex) runs supervision as a bounded
+# FOREGROUND checkpoint (bin/fm-watch-checkpoint.sh), so the watcher process has
+# by construction already exited before the model regains control and the turn
+# can end. Demanding a live pid here was therefore unsatisfiable: a beacon
+# touched milliseconds earlier by that checkpoint still blocked, every turn with
+# work in flight, and the prescribed repair - another checkpoint - refreshed the
+# beacon and then exited again. Accept "a checkpoint ran within grace" instead,
+# the same tolerance the Claude and Cursor between-turns models already get
+# (docs/turnend-guard.md). The beacon half is unchanged, so a home whose
+# checkpoints stopped running still blocks once the beacon passes grace.
+if [ "$(fm_supervision_model)" = checkpoint ] \
+  && [ "$(fm_path_age "$STATE/.last-watcher-beat")" -lt "$GRACE" ]; then
+  allow_supervised_stop
+fi
+
 # Away mode transfers supervision ownership from the watcher to the away-mode
 # daemon, which runs the watcher one-shot and starts its replacement after every
 # wake (bin/fm-supervise-daemon.sh). A turn boundary regularly lands in that

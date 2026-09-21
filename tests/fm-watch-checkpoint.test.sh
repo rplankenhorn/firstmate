@@ -81,7 +81,33 @@ test_existing_singleton_watcher_is_not_success() {
   pass "checkpoint rejects an existing watcher singleton as unowned"
 }
 
+# A WEDGED watcher is the one contention case a checkpoint can neither fix nor
+# wait out: bin/fm-watch.sh refuses to re-arm when a live pid holds the lock
+# with a stale or missing heartbeat. That refusal reaches stderr only, so
+# without its own arm the checkpoint reported a bare failure and the operator
+# never saw the repair. This case pins the distinct outcome, and the singleton
+# case above pins that ordinary healthy contention still reads as contention.
+test_wedged_watcher_names_the_restart_repair() {
+  local home out err status
+  home=$(make_home wedged)
+  out="$home/out.txt"
+  err="$home/err.txt"
+  mkdir "$home/state/.watch.lock"
+  printf '%s\n' "$$" > "$home/state/.watch.lock/pid"
+  # No heartbeat at all, and a lock older than the stale grace: bin/fm-watch.sh
+  # reads that pair as a watcher that arrived and then stopped beating.
+  touch -t 202001010000 "$home/state/.watch.lock"
+  [ ! -e "$home/state/.last-watcher-beat" ] || fail "fixture must have no watcher heartbeat"
+  status=0
+  FM_HOME="$home" FM_GUARD_GRACE=1 "$CHECKPOINT" --seconds 5 >"$out" 2>"$err" || status=$?
+  expect_code 1 "$status" "wedged checkpoint exit"
+  assert_contains "$(cat "$err")" "WEDGED watcher holds the lock" "wedged watcher was not reported as its own outcome"
+  assert_contains "$(cat "$err")" "bin/fm-watch-arm.sh --restart" "wedged watcher outcome did not name the repair"
+  pass "checkpoint reports a wedged watcher as its own outcome naming the restart repair"
+}
+
 test_quiet_checkpoint_exits_124_cleanly
 test_signal_passes_through_and_exits_zero
 test_registered_check_uses_preserved_watcher_environment
 test_existing_singleton_watcher_is_not_success
+test_wedged_watcher_names_the_restart_repair
