@@ -24,6 +24,11 @@ export NODE_NO_WARNINGS=1
 # tests are sized against this number.
 ARM_READY_TIMEOUT_MS=2000
 
+install_opencode_supervision_fixture() {
+  local repo=$1
+  cp "$ROOT/bin/fm-supervision-lib.sh" "$repo/bin/fm-supervision-lib.sh"
+}
+
 install_pi_watch_extension_fixture() {
   local repo=$1
   mkdir -p \
@@ -3029,6 +3034,7 @@ test_opencode_primary_watch_plugin_uses_effective_state_home() {
   log="$TMP_ROOT/opencode-effective-state.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3079,8 +3085,10 @@ test_opencode_primary_watch_plugin_sources_effective_config() {
   log="$TMP_ROOT/opencode-effective-config.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   printf 'export FM_POLL=7\n' > "$home/config/x-mode.env"
+  : > "$home/state/x-watch.check.sh"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'poll=%s\n' "${FM_POLL:-missing}" >> "${FM_ARM_LOG:?}"
@@ -3120,6 +3128,55 @@ EOF
   pass "OpenCode watcher plugin sources the effective config"
 }
 
+test_opencode_primary_watch_plugin_arms_for_process_event_source() {
+  local plugin repo home log stop out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
+  repo="$TMP_ROOT/opencode-process-event-source-root"
+  home="$TMP_ROOT/opencode-process-event-source-home"
+  log="$TMP_ROOT/opencode-process-event-source.log"
+  stop="$TMP_ROOT/opencode-process-event-source.stop"
+  mkdir -p "$repo/bin" "$home/state/procevent" "$home/config"
+  git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
+  : > "$repo/AGENTS.md"
+  : > "$home/state/procevent/source-only.source"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM INT
+while [ ! -e "${FM_STOP_FILE:?}" ]; do sleep 0.02; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" WORKTREE="$repo" FM_HOME="$home" FM_ARM_LOG="$log" FM_STOP_FILE="$stop" node 2>&1 <<'EOF'
+import { existsSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+const client = { session: { promptAsync: async () => {} } };
+const hooks = await mod.FmPrimaryWatchArm({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+for (let i = 0; i < 250 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+if (!existsSync(process.env.FM_ARM_LOG)) {
+  console.error("watch arm did not run for a registered process-event source");
+  process.exit(1);
+}
+writeFileSync(process.env.FM_STOP_FILE, "stop\n");
+EOF
+  )
+  status=$?
+  expect_code 0 "$status" "OpenCode watch plugin must arm for a registered process-event source without task metadata"
+  [ -z "$out" ] || fail "OpenCode process-event source test printed output: $out"
+  pass "OpenCode watcher plugin arms for a registered process-event source"
+}
+
 test_opencode_primary_watch_plugin_requires_session_lock() {
   local plugin repo home log out status
   plugin="$ROOT/.opencode/plugins/fm-primary-watch-arm.js"
@@ -3128,6 +3185,7 @@ test_opencode_primary_watch_plugin_requires_session_lock() {
   log="$TMP_ROOT/opencode-lock.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3190,6 +3248,7 @@ test_opencode_watch_arm_coordinator_respects_primary_scope() {
   log="$TMP_ROOT/opencode-coordinator.log"
   fm_git_worktree "$base" "$repo" fm/opencode-coordinator
   mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3237,6 +3296,7 @@ test_opencode_primary_watch_plugin_rearms_after_wake() {
   stop="$TMP_ROOT/opencode-rearm.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3332,6 +3392,7 @@ test_opencode_pre_ready_actionable_close_preserves_its_successor() {
   stop="$TMP_ROOT/opencode-pre-ready-actionable.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3412,6 +3473,7 @@ test_opencode_hung_successor_falls_back_to_typed_wake() {
   log="$TMP_ROOT/opencode-hung-successor.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3483,6 +3545,7 @@ test_opencode_unretired_successor_falls_back_without_retry() {
   release="$TMP_ROOT/opencode-unretired-successor.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3560,6 +3623,7 @@ test_opencode_late_unretired_close_resumes_supervision() {
     stop="$TMP_ROOT/opencode-late-$kind.stop"
     mkdir -p "$repo/bin" "$home/state" "$home/config"
     git init -q "$repo"
+    install_opencode_supervision_fixture "$repo"
     : > "$repo/AGENTS.md"
     : > "$home/state/task.meta"
     cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3655,6 +3719,7 @@ test_opencode_empty_close_retries_instead_of_disappearing() {
   stop="$TMP_ROOT/opencode-empty-close.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3714,6 +3779,7 @@ test_opencode_established_empty_close_honors_retry_limit() {
   log="$TMP_ROOT/opencode-established-empty-close.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3768,6 +3834,7 @@ test_opencode_actionable_close_rechecks_session_lock() {
   release="$TMP_ROOT/opencode-close-lock.release"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3834,6 +3901,7 @@ test_opencode_watch_arm_coordinates_with_turnend_guard() {
   guard_log="$TMP_ROOT/opencode-coordinate-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -3907,6 +3975,7 @@ test_opencode_healthy_arm_output_does_not_suppress_guard() {
   guard_log="$TMP_ROOT/opencode-external-healthy-guard.log"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
@@ -4010,6 +4079,7 @@ test_pi_process_exit_cleanup_stops_arm_child
 test_opencode_plugin_package_boundary_is_explicit_esm
 test_opencode_primary_watch_plugin_uses_effective_state_home
 test_opencode_primary_watch_plugin_sources_effective_config
+test_opencode_primary_watch_plugin_arms_for_process_event_source
 test_opencode_primary_watch_plugin_requires_session_lock
 test_opencode_watch_arm_coordinator_respects_primary_scope
 test_opencode_primary_watch_plugin_rearms_after_wake
