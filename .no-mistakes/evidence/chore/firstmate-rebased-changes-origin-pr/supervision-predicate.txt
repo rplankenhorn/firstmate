@@ -1,0 +1,8 @@
+== empty state (nothing needed) ==
+NOARM
+== source-only .source, no .meta (NEW behavior) ==
+ARM
+== task .meta present ==
+ARM
+== x-watch relay poll ==
+ARM
