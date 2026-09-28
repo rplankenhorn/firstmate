@@ -1357,6 +1357,69 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
   pass "SIGSTOP distinguishes live PID from stale beacon and termination records the exit class"
 }
 
+# The liveness beacon promises that a healthy watcher's beacon ages by at most
+# the terminal wait, which is what the guards' max(300, FM_POLL + 60) grace
+# assumes. Touched only at the top of the cycle, a healthy cycle's beacon aged
+# by the cycle BODY plus the wait, and the body has no time bound of its own. A
+# registered check that takes a few seconds drives the two touches apart: the
+# beacon must be refreshed after that body finishes and before the wait, rather
+# than left at the pre-body time for the whole wait.
+test_beacon_is_refreshed_after_a_slow_cycle_body() {
+  local dir state fakebin out check_file pid beat_top finished beat i
+  dir=$(make_case beacon-after-slow-body)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  check_file="$state/slow-body.check.sh"
+  cat > "$check_file" <<SH
+#!/usr/bin/env bash
+touch "$dir/body.started"
+sleep 3
+touch "$dir/body.finished"
+SH
+  chmod 0700 "$check_file"
+  FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-check-register.sh" slow-body >/dev/null \
+    || fail "could not register the slow-body custom check"
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_POLL=20 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=1 FM_HEARTBEAT=999999 "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -e "$dir/body.started" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$dir/body.started" ] || fail "the watcher never ran the slow-body check: $(cat "$out")"
+  beat_top=$(fm_test_mtime "$state/.last-watcher-beat") || fail "no beacon while the cycle body ran"
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -e "$dir/body.finished" ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  finished=$(fm_test_mtime "$dir/body.finished") || fail "the slow-body check never finished: $(cat "$out")"
+  [ "$finished" -gt "$beat_top" ] \
+    || fail "fixture must end the cycle body after the top-of-cycle beacon (top=$beat_top finished=$finished)"
+  # The wait is 20s, so a beacon still at the top-of-cycle time well inside it
+  # is one that the cycle never refreshed before waiting.
+  i=0
+  beat=$beat_top
+  while [ "$i" -lt 50 ]; do
+    beat=$(fm_test_mtime "$state/.last-watcher-beat") || beat=0
+    [ "$beat" -ge "$finished" ] && break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ "$beat" -ge "$finished" ] \
+    || fail "the beacon was left at the pre-body time into the wait (beacon=$beat body-finished=$finished)"
+  is_live_non_zombie "$pid" || fail "the watcher did not stay in its wait: $(cat "$out")"
+  ! grep -q '^check:' "$out" || fail "a silent check must not wake the watcher: $(cat "$out")"
+  stop_seed_watcher "$pid" "$out"
+  pass "the liveness beacon is refreshed after a slow cycle body, before the terminal wait"
+}
+
+# fm_test_mtime <path>: the path's mtime in epoch seconds.
+fm_test_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
 test_pid_identity_is_locale_invariant() {
   # The portable fallback records its process identity under one locale, then
   # arm/guard/turn-end re-read it under the machine's ambient locale. ps's lstart
@@ -1585,3 +1648,4 @@ test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
 test_cycle_exit_ledger_links_successor_and_stays_bounded
 test_stopped_watcher_is_live_but_stale_then_exit_is_classified
+test_beacon_is_refreshed_after_a_slow_cycle_body
