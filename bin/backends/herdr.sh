@@ -412,8 +412,12 @@ fm_backend_herdr_workspace_label() {
 fm_backend_herdr_cli_timeout() {
   local bound=${FM_HERDR_CLI_TIMEOUT:-$FM_BACKEND_HERDR_CLI_TIMEOUT_DEFAULT}
   # A non-positive or malformed bound is not a bound (bin/fm-timeout-lib.sh),
-  # so fall back to the default rather than silently running unbounded.
-  case "$bound" in ''|*[!0-9]*|0) bound=$FM_BACKEND_HERDR_CLI_TIMEOUT_DEFAULT ;; esac
+  # so fall back to the default rather than silently running unbounded. The
+  # digits are read as decimal so a zero spelled with leading zeros ("00") is
+  # caught as well: `timeout 00` disables the deadline exactly as `timeout 0`.
+  case "$bound" in ''|*[!0-9]*) bound=$FM_BACKEND_HERDR_CLI_TIMEOUT_DEFAULT ;; esac
+  bound=$((10#$bound))
+  [ "$bound" -gt 0 ] || bound=$FM_BACKEND_HERDR_CLI_TIMEOUT_DEFAULT
   printf '%s\n' "$bound"
 }
 
