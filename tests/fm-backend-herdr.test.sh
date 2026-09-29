@@ -387,6 +387,136 @@ test_cli_helper_sets_env_and_appends_trailing_session_flag() {
   pass "fm_backend_herdr_cli: sets HERDR_SESSION AND appends a trailing --session flag on every call"
 }
 
+# --- fm_backend_herdr_cli: every round trip is time-bounded -------------------
+#
+# A herdr server that accepts a request and never answers used to hold the
+# calling supervision cycle open while the watcher pid stayed alive. The fakes
+# below hang instead of answering, so only FM_HERDR_CLI_TIMEOUT can end a call:
+# an unbounded call fails on elapsed time, and the hung client process must be
+# gone afterwards rather than left running behind the caller.
+
+# make_hanging_herdr <dir>: a `herdr` that appends its pid to <dir>/pids and
+# then hangs on every subcommand except `server`, which outlives a 1s bound and
+# then exits 0 the way a long-lived launch left alone does.
+make_hanging_herdr() {  # <dir> -> echoes fakebin dir
+  local dir=$1 fb="$1/fakebin"
+  mkdir -p "$fb"
+  cat > "$fb/herdr" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$$" >> "${FM_HANG_DIR:?}/pids"
+if [ "${1:-}" = server ]; then
+  sleep 3
+  printf 'server-outlived-the-bound\n'
+  exit 0
+fi
+exec sleep 60
+SH
+  chmod +x "$fb/herdr"
+  printf '%s\n' "$fb"
+}
+
+# herdr_hung_pids_gone <pids-file>: 0 once every recorded fake pid has exited.
+herdr_hung_pids_gone() {
+  local pids=$1 pid i
+  [ -s "$pids" ] || return 1
+  while IFS= read -r pid; do
+    i=0
+    while kill -0 "$pid" 2>/dev/null; do
+      [ "$i" -lt 30 ] || return 1
+      sleep 0.1
+      i=$((i + 1))
+    done
+  done < "$pids"
+}
+
+# shellcheck disable=SC2016
+test_cli_bounds_a_hung_round_trip() {
+  local dir fb start elapsed rc
+  dir="$TMP_ROOT/cli-hung"; mkdir -p "$dir"
+  fb=$(make_hanging_herdr "$dir")
+  start=$(date +%s)
+  rc=0
+  PATH="$fb:$PATH" FM_HANG_DIR="$dir" FM_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_cli fmtest pane get w1:p1' "$ROOT" \
+    >"$dir/out" 2>"$dir/err" || rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  expect_code 124 "$rc" "a hung herdr round trip must end at its bound with the timeout status"
+  [ "$elapsed" -lt 20 ] || fail "a hung herdr round trip held its caller ${elapsed}s against a 1s bound"
+  assert_contains "$(cat "$dir/err")" 'herdr: no response within 1s (herdr pane) - the herdr server is unresponsive or wedged' \
+    "the timeout must be reported distinctly, naming the bound and the subcommand"
+  herdr_hung_pids_gone "$dir/pids" || fail "the hung herdr client outlived its bound: $(cat "$dir/pids" 2>/dev/null)"
+  pass "fm_backend_herdr_cli: a hung round trip ends at FM_HERDR_CLI_TIMEOUT, reports the timeout, and leaves no hung client"
+}
+
+# shellcheck disable=SC2016
+test_cli_bounds_the_reselected_client_retry() {
+  local dir start elapsed rc
+  dir="$TMP_ROOT/cli-hung-retry"
+  mkdir -p "$dir/stale" "$dir/current" "$dir/tools"
+  ln -sf "$(command -v jq)" "$dir/tools/jq"
+  # The stale client is refused by the running server, so the adapter selects
+  # the compatible one and retries on it; that retry is what hangs here.
+  cat > "$dir/stale/herdr" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "status --json" ]; then
+  printf '{"client":{"version":"0.8.2","protocol":20},"server":{"running":true,"protocol":22,"compatible":false}}\n'
+  exit 0
+fi
+printf '{"error":{"code":"protocol_mismatch"}}\n' >&2
+exit 1
+SH
+  cat > "$dir/current/herdr" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "status --json" ]; then
+  printf '{"client":{"version":"0.9.0","protocol":22},"server":{"running":true,"protocol":22,"compatible":true}}\n'
+  exit 0
+fi
+printf '%s\n' "$$" >> "${FM_HERDR_PAIR_DIR:?}/pids"
+exec sleep 60
+SH
+  chmod +x "$dir/stale/herdr" "$dir/current/herdr"
+  start=$(date +%s)
+  rc=0
+  FM_HERDR_CLI_TIMEOUT=1 run_with_clients "$dir" "$dir/stale:$dir/current" \
+    'fm_backend_herdr_cli fm-remote pane get w1:p1' >"$dir/out" 2>"$dir/err" || rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  expect_code 124 "$rc" "a hung retry on the reselected client must end at its bound with the timeout status"
+  [ "$elapsed" -lt 20 ] || fail "a hung retry on the reselected client held its caller ${elapsed}s against a 1s bound"
+  assert_contains "$(cat "$dir/err")" "herdr: no response within 1s ($dir/current/herdr pane)" \
+    "the retry's timeout must be reported distinctly, naming the client that did not answer"
+  herdr_hung_pids_gone "$dir/pids" || fail "the reselected herdr client outlived its bound: $(cat "$dir/pids" 2>/dev/null)"
+  pass "fm_backend_herdr_cli: the protocol_mismatch retry on the reselected client is bounded too"
+}
+
+# shellcheck disable=SC2016
+test_cli_exempts_the_long_lived_server_launch() {
+  local dir fb out rc
+  dir="$TMP_ROOT/cli-server-exempt"; mkdir -p "$dir"
+  fb=$(make_hanging_herdr "$dir")
+  rc=0
+  out=$(PATH="$fb:$PATH" FM_HANG_DIR="$dir" FM_HERDR_CLI_TIMEOUT=1 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_cli fmtest server' "$ROOT" 2>&1) || rc=$?
+  expect_code 0 "$rc" "the server launch must not be cut at the per-call bound: $out"
+  assert_contains "$out" server-outlived-the-bound "the server launch must run to its own end past the per-call bound"
+  pass "fm_backend_herdr_cli: the long-lived server launch is exempt from the per-call bound"
+}
+
+# shellcheck disable=SC2016
+test_cli_timeout_rejects_non_positive_and_malformed_bounds() {
+  local value got want
+  for value in '' 0 00 000 -5 1.5 abc 7 05; do
+    case "$value" in
+      7) want=7 ;;
+      05) want=5 ;;
+      *) want=30 ;;
+    esac
+    got=$(FM_HERDR_CLI_TIMEOUT="$value" bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_cli_timeout' "$ROOT")
+    [ "$got" = "$want" ] \
+      || fail "FM_HERDR_CLI_TIMEOUT='$value' must resolve to a ${want}s bound (a zero or malformed bound runs unbounded), got: $got"
+  done
+  pass "fm_backend_herdr_cli_timeout: a zero, negative, or malformed bound falls back to 30s, including a zero spelled 00"
+}
+
 # --- client selection: a stale client shadowing a compatible one -------------
 #
 # Two herdr clients on PATH is a real host shape (a self-updated ~/.local/bin
@@ -5615,6 +5745,10 @@ test_workspace_label_secondmate_marker_trims_whitespace
 test_workspace_label_empty_marker_falls_back_to_primary
 test_workspace_label_different_secondmates_get_different_labels
 test_cli_helper_sets_env_and_appends_trailing_session_flag
+test_cli_bounds_a_hung_round_trip
+test_cli_bounds_the_reselected_client_retry
+test_cli_exempts_the_long_lived_server_launch
+test_cli_timeout_rejects_non_positive_and_malformed_bounds
 test_agent_state_bypasses_a_stale_client_shadowing_a_compatible_one
 test_recovery_grade_read_widens_only_at_its_own_boundary
 test_stale_registration_over_a_shell_only_pane_is_agent_free
