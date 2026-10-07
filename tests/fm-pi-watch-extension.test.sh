@@ -4508,6 +4508,7 @@ test_opencode_primary_watch_plugin_runs_the_supervision_host() {  # [away|quiet]
   stop="$TMP_ROOT/opencode-host-$kind.stop"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   git init -q "$repo"
+  install_opencode_supervision_fixture "$repo"
   : > "$repo/AGENTS.md"
   : > "$home/state/task.meta"
   if [ "$kind" = quiet ]; then

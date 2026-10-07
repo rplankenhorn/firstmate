@@ -1254,7 +1254,10 @@ EOF
 run_hook_claude() {
   local dir=$1 stop_active=$2 home
   home=$(cd "$dir" && pwd)
-  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
+  # The explicit --claude invocation is the subject under test. Hide the
+  # surrounding agent's ancestry so a Codex runner cannot select the
+  # checkpoint turn-end allowance for this Claude-mode fixture.
+  printf '{"stop_hook_active":%s,"session_id":"sess-claude-mode"}' "$stop_active" | PATH="$BLIND_BIN:$PATH" CLAUDECODE=1 FM_HOME="$home" bash "$dir/bin/fm-turnend-guard.sh" --claude 2>&1
 }
 
 seed_claude_failure() {
