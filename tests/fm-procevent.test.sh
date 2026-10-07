@@ -72,6 +72,16 @@ chmod +x "$STARTED_BLOCKER"
 
 pe() { FM_HOME="$1" "$ROOT/bin/fm-procevent.sh" "${@:2}"; }
 
+# macOS hosts may not ship the standalone setsid utility even though Perl's
+# POSIX binding can create the same isolated holder process group.
+fm_test_setsid() {
+  if command -v setsid >/dev/null 2>&1; then
+    command setsid "$@"
+  else
+    perl -MPOSIX=setsid -e 'setsid() >= 0 or exit 1; exec @ARGV' "$@"
+  fi
+}
+
 # Every home this suite registers a source in is tracked so teardown can stop
 # its runners. A runner started by reconcile is detached and reparented, so a
 # source that never completes outlives the suite unless its home is swept -
@@ -4895,7 +4905,7 @@ done
 [ ! -e "$drain_claim" ] || fail "the first generation of the draining fixture never exited"
 # Stand the first generation's claim back up on a live process so the re-arm
 # meets it still held, then release it partway through the confirm window.
-setsid sleep 60 &
+fm_test_setsid sleep 60 &
 drain_holder=$!
 # Read the identity only once the holder has exec'd sleep: mid-exec its cmdline
 # can read empty, and a pre-exec identity would never match the live holder.
@@ -4976,5 +4986,84 @@ touch "$READY_RELEASE"
 PATH="$UNDISP/bin:$PATH" FM_HOME="$UNDISP/home" \
   "$ROOT/bin/fm-procevent-lavish.sh" retire "$undisp_art" >/dev/null 2>&1 || true
 pass "arm does not launch beside a stale claim whose process group is alive"
+
+# --- reconcile survives a stale steal chain on a source lock ----------------
+# The public process-event path acquires each source lock through
+# fm_lock_acquire_wait. The lock library now represents each lock as a
+# symlink to an owner directory, so this fixture creates the stale chain with
+# the public lock primitive, then kills its owner. A live third-level marker
+# is a tripwire: recovery may clear the stale primary and the first two stale
+# steal links, but it must neither inspect nor replace the live deeper marker.
+HSTEAL="$TMP_ROOT/reconcile-stale-steal"; new_home "$HSTEAL"
+STEAL_LOCK="$FM_PROCEVENT_CLAIM_ROOT/steal-recurse-src.lock"
+pe_register "$HSTEAL" lavish steal-recurse-src -- "$BLOCKER" "$TMP_ROOT/steal-recurse-trigger" "steal payload" >/dev/null
+
+leave_dead_link_locks() {  # <state> <lock>...
+  local state=$1 holder i last
+  shift
+  last=${!#}
+  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    shift
+    for lock do fm_lock_try_create "$lock" || exit 7; done
+    exec sleep 30
+  ' _ "$ROOT/bin/fm-wake-lib.sh" "$@" >/dev/null 2>&1 &
+  holder=$!
+  i=0
+  while [ "$i" -lt 100 ] && [ ! -s "$last/pid" ]; do
+    sleep 0.02
+    i=$((i + 1))
+  done
+  [ -s "$last/pid" ] || fail "stale lock fixture did not publish its owner"
+  kill -KILL "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+}
+
+leave_dead_link_locks "$HSTEAL/state" \
+  "$STEAL_LOCK" "$STEAL_LOCK.steal" "$STEAL_LOCK.steal.steal"
+STEAL_LIVE=
+FM_STATE_OVERRIDE="$HSTEAL/state" bash -c '
+  . "$1"
+  fm_lock_try_create "$2" || exit 7
+  exec sleep 30
+' _ "$ROOT/bin/fm-wake-lib.sh" "$STEAL_LOCK.steal.steal.steal" >/dev/null 2>&1 &
+STEAL_LIVE=$!
+reap_steal_live() {
+  [ -n "$STEAL_LIVE" ] || return 0
+  kill "$STEAL_LIVE" 2>/dev/null || true
+  wait "$STEAL_LIVE" 2>/dev/null || true
+  STEAL_LIVE=
+}
+trap 'reap_steal_live; fm_test_cleanup' EXIT
+trap 'reap_steal_live; fm_test_cleanup; exit 130' INT
+trap 'reap_steal_live; fm_test_cleanup; exit 143' TERM
+wait_for "$STEAL_LOCK.steal.steal.steal/pid" \
+  || fail "live deeper steal fixture did not publish its owner"
+STEAL_LIVE_OWNER_PID=$(cat "$STEAL_LOCK.steal.steal.steal/pid")
+
+FM_LOCK_STALE_AFTER=0 pe "$HSTEAL" reconcile >"$TMP_ROOT/reconcile-stale-steal.out" 2>&1 &
+STEAL_RECONCILE_PID=$!
+steal_deadline=$((SECONDS + 15))
+while kill -0 "$STEAL_RECONCILE_PID" 2>/dev/null; do
+  if [ "$SECONDS" -ge "$steal_deadline" ]; then
+    kill -KILL "$STEAL_RECONCILE_PID" 2>/dev/null || true
+    fail "reconcile did not exit within its bound on a stale steal chain (recursion regressed)"
+  fi
+  sleep 0.1
+done
+steal_reconcile_status=0
+wait "$STEAL_RECONCILE_PID" || steal_reconcile_status=$?
+[ "$steal_reconcile_status" -eq 0 ] \
+  || fail "reconcile failed while recovering a stale steal chain: $(cat "$TMP_ROOT/reconcile-stale-steal.out")"
+wait_for "$FM_PROCEVENT_CLAIM_ROOT/steal-recurse-src.claim" \
+  || fail "reconcile never reclaimed the source lock past the stale steal chain"
+STEAL_LIVE_STILL=$(cat "$STEAL_LOCK.steal.steal.steal/pid" 2>/dev/null || true)
+[ "$STEAL_LIVE_STILL" = "$STEAL_LIVE_OWNER_PID" ] \
+  || fail "reconcile disturbed the live deeper steal level"
+[ ! -e "$STEAL_LOCK.steal.steal.steal.steal" ] \
+  && [ ! -L "$STEAL_LOCK.steal.steal.steal.steal" ] \
+  || fail "reconcile formed a still-deeper nested steal path on a source lock"
+reap_steal_live
+pass "reconcile reclaims a stale steal chain in bounded time without a deeper steal level"
 
 printf '\nall procevent tests passed\n'

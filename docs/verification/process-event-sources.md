@@ -205,6 +205,7 @@ The healthy-runner case requires the attached `start` to return status 143 (TERM
 Two cases pin the guard's own numbers rather than only its outcome: one reaps an orphaned listener within the lease term plus a single check interval, with the lease expiry deliberately placed late in that interval, and one fails exactly one lease read against a home that is still alive and requires the runner to survive it.
 They fail for opposite reasons, which is the point of keeping them apart.
 The crashed-leader cases separately pin refusal and claim preservation when a leader dies outside the stop's own signal, so successful escalation cannot be mistaken for closing that limit.
+The stale-lock regression also reaches the public `reconcile` command: it creates stale symlinked owner records for the source lock and its first two `.steal` levels, leaves a live third-level marker as a tripwire, and verifies that the non-recursive upstream steal-mutex reaper recovers the source without touching that live marker or creating a deeper level.
 Refresh the regressions with `bash tests/fm-procevent.test.sh`; the dated measurements above are recorded observations, not fixed timing thresholds.
 
 ## Portability finding
