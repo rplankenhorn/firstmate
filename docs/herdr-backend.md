@@ -84,6 +84,12 @@ The choice is reused only for later calls to the same session in that process.
 Another session starts with the `PATH` default.
 A later mismatch forces selection again, so a changed server can return to that default.
 
+### CLI timeout scope
+
+`FM_HERDR_CLI_TIMEOUT` bounds each operational round trip routed through `fm_backend_herdr_cli`, including the one retry on a `protocol_mismatch` response.
+The long-lived `server` launch is intentionally exempt because it is expected to stay attached to the caller's lifecycle.
+The existing direct `status --json` probes used to select a compatible client, and the standalone client version check used by spawn preflight, remain outside this timeout; they are compatibility/version reads rather than operational calls through the timed helper.
+
 Selection also follows these rules:
 
 - Ordinary adapter operations make no selection read on the happy path.
