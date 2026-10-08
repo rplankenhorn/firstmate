@@ -1,0 +1,15 @@
+# after manual poll recorded the 404 error, registered check runs again (ambient GITHUB_TOKEN present)
+$ bash $LAB/state/contributions.check.sh
+exit=0
+caller GITHUB_TOKEN still: present
+   8 GITHUB_TOKEN=absent
+{
+  "records": [
+    {
+      "url": "https://github.com/cvent-sensitive-internal/fl-ai-wheel/pull/1084",
+      "checked_at": "2026-10-08T16:34:42Z",
+      "error": null,
+      "state": "open"
+    }
+  ]
+}

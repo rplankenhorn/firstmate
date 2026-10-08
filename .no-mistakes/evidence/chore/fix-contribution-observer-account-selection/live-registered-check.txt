@@ -1,0 +1,27 @@
+ambient GITHUB_TOKEN in caller: present (resolves to account: rplankenhorn)
+$ FM_HOME=$LAB bin/fm-contributions.sh arm
+registered: state/contributions.check.sh
+rc=0
+--- generated $LAB/state/contributions.check.sh ---
+#!/usr/bin/env bash
+export FM_HOME=$LAB
+export FM_STATE_OVERRIDE=$LAB/state
+export FM_DATA_OVERRIDE=$LAB/data
+exec env -u GITHUB_TOKEN /Users/rplankenhorn/.no-mistakes/worktrees/61c331b0bdb7/01M4E5DN83PFND1FHH3H1MY375/bin/fm-contributions.sh poll
+
+$ bash $LAB/state/contributions.check.sh
+rc=
+--- forge calls made by registered check (count by token presence) ---
+   8 GITHUB_TOKEN=absent
+--- saved record ---
+{
+  "task": "wheel",
+  "records": [
+    {
+      "url": "https://github.com/cvent-sensitive-internal/fl-ai-wheel/pull/1084",
+      "checked_at": "2026-10-08T16:34:08Z",
+      "error": null,
+      "state": "open"
+    }
+  ]
+}

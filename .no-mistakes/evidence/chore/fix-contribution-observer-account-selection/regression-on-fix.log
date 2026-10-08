@@ -1,0 +1,2 @@
+ok - registered contribution check omits GITHUB_TOKEN without changing manual polling or its caller
+rc=0

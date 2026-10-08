@@ -1,0 +1,17 @@
+$ FM_HOME=$LAB bin/fm-contributions.sh poll   (manual, ambient GITHUB_TOKEN present)
+contributions: observation unavailable for https://github.com/cvent-sensitive-internal/fl-ai-wheel/pull/1084
+rc=
+--- forge calls made by manual poll (count by token presence) ---
+   1 GITHUB_TOKEN=present
+--- saved record ---
+{
+  "task": "wheel",
+  "records": [
+    {
+      "url": "https://github.com/cvent-sensitive-internal/fl-ai-wheel/pull/1084",
+      "checked_at": "2026-10-08T16:34:12Z",
+      "error": "forge observation unavailable or changed during read",
+      "state": "open"
+    }
+  ]
+}
