@@ -16,6 +16,8 @@
 # owned. Previously observed URLs remain in data/<task>/contributions.json after
 # endpoint teardown. Repository-wide PR discovery never establishes ownership.
 # GitHub PRs and issues are supported; other forges remain visibly unmeasured.
+# arm registers a check that unsets GITHUB_TOKEN for its poll invocation so
+# stored accounts can be used; a manual poll retains the caller's environment.
 #
 # This script owns fm-contributions.v1: one atomic file per durable task with
 # task and records[]. Each record contains url, kind, checked_at, error,
@@ -451,7 +453,7 @@ arm() {
   if [ -n "${FM_CONTRIBUTIONS_BUDGET:-}" ]; then
     shim+=("export FM_CONTRIBUTIONS_BUDGET=$(printf '%q' "$FM_CONTRIBUTIONS_BUDGET")")
   fi
-  shim+=("exec $(printf '%q' "$SCRIPT_DIR/fm-contributions.sh") poll")
+  shim+=("exec env -u GITHUB_TOKEN $(printf '%q' "$SCRIPT_DIR/fm-contributions.sh") poll")
   printf '%s\n' "${shim[@]}" > "$staged"
   chmod 700 "$staged"
   mv -f -- "$staged" "$STATE/contributions.check.sh"
