@@ -512,11 +512,14 @@ SH
 
 # make_fake_herdr_deadly_read <fakebin> <live-pane> <kill-pane>: like
 # make_fake_herdr, but `pane get <kill-pane>` KILLs the shell running the
-# endpoint read. The read's shell is the fake's grandparent (fm_backend_herdr_cli's
-# stderr-capture subshell sits in between), so the fake walks one /proc hop
-# above $PPID. This is the digest-death shape: a per-task herdr liveness
-# read whose process died mid-read, which used to take the whole
-# session-start digest with it.
+# endpoint read. The read's shell is the `bash -c <script> _ fm-backend.sh ...`
+# child, but its depth above the fake varies (fm_backend_herdr_cli's
+# stderr-capture subshell and fm_run_timed's timeout wrapper sit in between),
+# so the fake walks /proc upward to the first ancestor with that argv whose
+# parent's argv differs - the read shell itself, not one of its forked
+# subshells, which share its argv. This is the digest-death shape: a per-task
+# herdr liveness read whose process died mid-read, which used to take the
+# whole session-start digest with it.
 make_fake_herdr_deadly_read() {
   local fakebin=$1 live=$2 killpane=$3
   cat > "$fakebin/herdr" <<SH
@@ -524,8 +527,16 @@ make_fake_herdr_deadly_read() {
 set -u
 if [ "\${1:-}" = pane ] && [ "\${2:-}" = get ]; then
   if [ "\${3:-}" = "$killpane" ]; then
-    read_shell=\$(sed 's/^[^)]*) //' /proc/\$PPID/stat 2>/dev/null | awk '{print \$2}')
-    kill -KILL "\$read_shell" 2>/dev/null
+    pid=\$PPID
+    while [ "\$pid" -gt 1 ] 2>/dev/null; do
+      parent=\$(sed 's/^.*) //' /proc/\$pid/stat 2>/dev/null | awk '{print \$2}')
+      if grep -qz '/fm-backend\.sh\$' /proc/\$pid/cmdline 2>/dev/null \\
+        && ! cmp -s /proc/\$pid/cmdline /proc/\$parent/cmdline; then
+        kill -KILL "\$pid" 2>/dev/null
+        exit 0
+      fi
+      pid=\$parent
+    done
     exit 0
   fi
   [ "\${3:-}" = "$live" ] && exit 0

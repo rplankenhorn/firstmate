@@ -93,7 +93,7 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-agent-process-lib.sh
 . "$FM_BACKEND_HERDR_ROOT/bin/fm-agent-process-lib.sh"
 
-# Bounded execution is bin/fm-timeout-lib.sh's alone (fm_run_timed); every herdr
+# Bounded execution is bin/fm-timeout-lib.sh's alone (fm_exec_timed); every herdr
 # CLI call below runs under it. Its `set -u` matches every caller of this
 # adapter, but restore the caller's own setting anyway so sourcing this file
 # still changes no shell option.
@@ -408,7 +408,11 @@ fm_backend_herdr_workspace_label() {
 # trip froze the cycle with the watcher pid still alive - "process alive, beacon
 # frozen", the exact shape the turn-end guard cannot distinguish from a healthy
 # watcher until the beacon ages out. Bounded, that degrades to one failed call
-# and the cycle continues.
+# and the cycle continues. The bound is fm_exec_timed's, not fm_run_timed's:
+# both move the call into its own process group, but only fm_exec_timed's
+# watchdog reaps that group when its caller dies, so an outer bound that kills
+# the caller (session start's per-task endpoint read, the home-summary refresh)
+# still takes the hung client down with it.
 fm_backend_herdr_cli_timeout() {
   local bound=${FM_HERDR_CLI_TIMEOUT:-$FM_BACKEND_HERDR_CLI_TIMEOUT_DEFAULT}
   # A non-positive or malformed bound is not a bound (bin/fm-timeout-lib.sh),
@@ -438,9 +442,10 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
     return $?
   fi
   failed_bin=$client_bin
-  { err=$(fm_run_timed "$bound" env HERDR_SESSION="$session" "$failed_bin" "$@" --session "$session" 2>&1 1>&3 3>&-) || rc=$?; } 3>&1
+  { err=$(fm_exec_timed "$bound" 1 env HERDR_SESSION="$session" "$failed_bin" "$@" --session "$session" 2>&1 1>&3 3>&-) || rc=$?; } 3>&1
+  ! fm_timed_out "$rc" || rc=124
   if [ "$rc" -eq 124 ]; then
-    # fm_run_timed reserves 124 for "the bound was hit"; no herdr subcommand
+    # fm_exec_timed reserves 124 for "the bound was hit"; no herdr subcommand
     # uses that status, so say plainly that the server did not answer rather
     # than replaying an empty stderr as an unexplained failure.
     printf 'herdr: no response within %ss (%s %s) - the herdr server is unresponsive or wedged\n' \
@@ -454,8 +459,9 @@ fm_backend_herdr_cli() {  # <session> <herdr-subcommand-and-args...>
         fm_backend_herdr_client_select "$session" force
         selected_bin=$(fm_backend_herdr_bin)
         if [ "$selected_bin" != "$failed_bin" ]; then
-          fm_run_timed "$bound" env HERDR_SESSION="$session" "$selected_bin" "$@" --session "$session"
+          ( fm_exec_timed "$bound" 1 env HERDR_SESSION="$session" "$selected_bin" "$@" --session "$session" )
           rc=$?
+          ! fm_timed_out "$rc" || rc=124
           [ "$rc" -ne 124 ] || printf 'herdr: no response within %ss (%s %s) - the herdr server is unresponsive or wedged\n' \
             "$bound" "$selected_bin" "$1" >&2
           return "$rc"
