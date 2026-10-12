@@ -998,8 +998,8 @@ if [ "${FM_LINT_REQUIRE_BOUNDS:-0}" = 1 ]; then
   if [ "$BOUND_MECH" != none ]; then
     # Exercise the real bound end to end before any root starts: a clean probe
     # must exit 0 and an over-deadline probe must come back as a timeout, so a
-    # watchdog that cannot actually bound a command (a perl without
-    # Time::HiRes, say) refuses the run here instead of failing every root at
+    # watchdog that cannot actually bound a command (a perl missing POSIX or
+    # Fcntl, say) refuses the run here instead of failing every root at
     # run time.
     probe_rc=0
     ( fm_exec_timed 30 1 true ) >/dev/null 2>&1 || probe_rc=$?
