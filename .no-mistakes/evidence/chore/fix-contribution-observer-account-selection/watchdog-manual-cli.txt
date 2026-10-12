@@ -1,0 +1,13 @@
+== perl Time::HiRes hidden:
+no hires
+== fast exit status 7 + output
+hi
+rc=7
+== bound 1s on sleep 30 (expect 124 ~1s)
+rc=124 elapsed=1s
+== TERM-ignoring cmd bound 1 grace 1 (expect 124 ~2s)
+rc=124 elapsed=3s
+== external TERM forwarded (expect 143)
+rc=143
+== owner dead (expect TERM quickly)
+rc=143 elapsed=0s

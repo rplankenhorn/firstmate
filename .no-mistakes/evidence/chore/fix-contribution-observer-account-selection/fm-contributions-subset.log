@@ -1,0 +1,4 @@
+ok - registered contribution check omits GITHUB_TOKEN without changing manual polling or its caller
+ok - budget exhausted mid-observation (hang) keeps the prior record and stays silent
+ok - a read killed at the five-second bound is budget refusal and stays silent
+ok - generated checks enforce configured and inherited budgets at runtime

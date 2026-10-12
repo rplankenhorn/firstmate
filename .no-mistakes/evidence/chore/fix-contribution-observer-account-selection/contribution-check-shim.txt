@@ -1,0 +1,10 @@
+registered: state/contributions.check.sh
+arm_rc=0
+== shim /var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T//fm-lab.k4GdW5/state/contributions.check.sh
+#!/usr/bin/env bash
+export FM_HOME=/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T//fm-lab.k4GdW5
+export FM_STATE_OVERRIDE=/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T//fm-lab.k4GdW5/state
+export FM_DATA_OVERRIDE=/var/folders/xh/bb3g_k2j0zv4zrldqfxwxqc00000gp/T//fm-lab.k4GdW5/data
+exec env -u GITHUB_TOKEN /Users/rplankenhorn/.no-mistakes/worktrees/61c331b0bdb7/01M4RQ5BY116EW6ZBRH55RM15S/bin/fm-contributions.sh poll
+== registered check run with ambient GITHUB_TOKEN
+rc=0
