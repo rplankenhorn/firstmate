@@ -55,6 +55,34 @@ wait_for_file() {  # <path>
   done
 }
 
+test_fast_exit_does_not_wait_for_the_owner_poll() {
+  # Measure child completion -> wrapper return, excluding interpreter startup.
+  # Take the best of repeated samples so scheduler load cannot turn one late
+  # sample into a false failure. The old watchdog imposes ~50ms on every one.
+  if ! command -v python3 >/dev/null 2>&1; then
+    pass 'fast-exit latency (skipped: python3 absent)'
+    return
+  fi
+  python3 - "$ROOT" <<'PY' || fail 'fast command completion still waits for the watchdog poll'
+import subprocess
+import sys
+import time
+
+samples = []
+for _ in range(15):
+    process = subprocess.Popen(
+        ["/bin/bash", "-c", '. "$1/bin/fm-timeout-lib.sh"; fm_exec_timed 5 1 /bin/sh -c "echo complete"',
+         "_", sys.argv[1]], stdout=subprocess.PIPE, text=True)
+    assert process.stdout.readline().strip() == "complete"
+    completed = time.monotonic()
+    assert process.wait(timeout=10) == 0
+    samples.append(time.monotonic() - completed)
+print("fast-exit best child-to-return: %.3f ms" % (min(samples) * 1000))
+assert min(samples) < 0.035, samples
+PY
+  pass 'fast child completion wakes the watchdog before the owner polling interval'
+}
+
 test_passes_the_command_status_and_output_through() {
   local out rc=0
   out=$(exec_timed "$PERL_ONLY" 5 1 bash -c 'echo to-stdout; echo to-stderr >&2; exit 7' 2>&1) || rc=$?
@@ -393,6 +421,18 @@ test_run_timed_passes_a_natural_exit_through_a_fired_bound() {
   [ "$out" = through ] || fail 'a completed read lost its output to the fired bound'
   pass 'fm_run_timed passes a natural exit through when the bound fired after completion'
 }
+
+test_fast_exit_does_not_wait_for_the_owner_poll
+# Make Time::HiRes unavailable even on full Perl installations. Run the entire
+# behavioral suite under this condition, including signal and owner-death
+# cleanup, rather than treating a fallback that merely runs true as sufficient.
+NO_HIRES="$TMP_ROOT/no-hires"
+mkdir -p "$NO_HIRES/Time"
+printf 'die "Time::HiRes deliberately unavailable in this fixture\\n";\n' > "$NO_HIRES/Time/HiRes.pm"
+export PERL5LIB="$NO_HIRES${PERL5LIB:+:$PERL5LIB}"
+if ( perl -MTime::HiRes -e 1 ) >/dev/null 2>&1; then
+  fail 'fixture did not make Time::HiRes unavailable'
+fi
 
 test_passes_the_command_status_and_output_through
 test_system_bash_preserves_completion_and_signal_statuses

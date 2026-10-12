@@ -201,10 +201,11 @@ fm_timed_out() {  # <status>
 }
 
 # The perl watchdog forks the command into its own process group (both sides
-# call setpgid, so the group exists before either can signal it) and polls
-# waitpid(WNOHANG) against wall-clock deadlines rather than using alarm+die,
-# which keeps the bound off perl's platform-dependent syscall-restart signal
-# semantics and off the drift of counting sleep intervals.
+# call setpgid, so the group exists before either can signal it). A self-pipe
+# wakes the nonblocking wait on child exit or signals, without a polling delay
+# on fast commands. Core Perl alarm supplies the bound and grace without
+# Time::HiRes; handlers wake the loop rather than dying through a blocked wait.
+# The 50ms select ceiling only bounds detection of an owner that disappeared.
 fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
   local seconds=${1:-} grace=${2:-} value owner
   for value in "$seconds" "$grace"; do
@@ -223,23 +224,37 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
   unset FM_EXEC_TIMED_OWNER_PID
   if command -v perl >/dev/null 2>&1; then
-    exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
+    exec perl -MPOSIX=WNOHANG,setpgid -MFcntl=F_GETFL,F_SETFL,O_NONBLOCK -e '
       my ($bound, $grace, $owner, $shell_parent) = (shift, shift, shift, shift);
       # exec preserves the shell PID, including in Bash 3.2 subshells where
       # BASHPID is unavailable. Keep the pre-exec parent for startup races.
       $owner = $shell_parent if $owner == $$;
       my $parent = getppid();
-      my ($pid, $pending, $kill_at, $timed_out) = (0, "", 0, 0);
+      pipe(my $ready, my $notify) or exit 127;
+      for my $fh ($ready, $notify) {
+        my $flags = fcntl($fh, F_GETFL, 0);
+        exit 127 unless defined $flags && defined fcntl($fh, F_SETFL, $flags | O_NONBLOCK);
+      }
+      my ($pid, $pending, $gracing, $timed_out, $expired) = (0, "", 0, 0, 0);
+      my $wake = sub { syswrite $notify, "."; };
+      my $start_grace = sub {
+        unless ($gracing) { $gracing = 1; alarm $grace; }
+      };
+      $SIG{CHLD} = $wake;
+      $SIG{ALRM} = sub { $expired = $gracing ? 2 : 1; $wake->(); };
       for my $sig (qw(TERM INT HUP)) {
         $SIG{$sig} = sub {
           if ($pid) { kill $sig, -$pid } else { $pending = $sig }
-          $kill_at ||= time + $grace;
+          $start_grace->();
+          $wake->();
         };
       }
       my $child = fork;
       exit 127 unless defined $child;
       if ($child == 0) {
-        $SIG{$_} = "DEFAULT" for qw(TERM INT HUP);
+        $SIG{$_} = "DEFAULT" for qw(TERM INT HUP CHLD ALRM);
+        close $ready;
+        close $notify;
         setpgid(0, 0);
         exec @ARGV;
         exit 127;
@@ -247,10 +262,10 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
       setpgid($child, $child);
       $pid = $child;
       kill $pending, -$pid if $pending;
-      my $deadline = time + $bound;
+      alarm $bound unless $gracing;
       sub finish {
         my $status = shift;
-        kill "KILL", -$pid if $kill_at;
+        kill "KILL", -$pid if $gracing;
         exit 124 if $timed_out;
         exit(($status & 127) ? 128 + ($status & 127) : $status >> 8);
       }
@@ -258,21 +273,27 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
         my $done = waitpid $pid, WNOHANG;
         finish($?) if $done == $pid;
         exit 127 if $done == -1;
-        if ($kill_at) {
-          if (time >= $kill_at) {
+        if ($expired) {
+          my $grace_expired = $expired == 2;
+          $expired = 0;
+          if ($grace_expired) {
             kill "KILL", -$pid;
             waitpid $pid, 0;
             finish($?);
           }
-        } elsif (time >= $deadline) {
           $timed_out = 1;
-          $kill_at = time + $grace;
+          $start_grace->();
           kill "TERM", -$pid;
-        } elsif (getppid() != $parent || !kill(0, $owner)) {
-          $kill_at = time + $grace;
+        } elsif (!$gracing && (getppid() != $parent || !kill(0, $owner))) {
+          $start_grace->();
           kill "TERM", -$pid;
         }
-        select undef, undef, undef, 0.05;
+        my $readable = "";
+        vec($readable, fileno($ready), 1) = 1;
+        select $readable, undef, undef, 0.05;
+        # Drain before the next waitpid so an exit racing with select cannot
+        # be lost. A full nonblocking pipe already represents a pending wake.
+        1 while sysread($ready, my $bytes, 4096);
       }
     ' -- "$seconds" "$grace" "$owner" "$PPID" "$@"
   elif command -v timeout >/dev/null 2>&1; then
