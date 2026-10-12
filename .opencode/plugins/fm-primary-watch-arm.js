@@ -117,19 +117,32 @@ async function isPrimaryRoot(root, home) {
   return gitDir.stdout.trim() === commonDir.stdout.trim();
 }
 
-async function shouldArm(paths) {
+// bin/fm-supervision-lib.sh's fm_supervision_needed is the single owner of the
+// arm condition set (the turn-end guard decides with the same shared
+// predicate), so this plugin can never disagree with the guard again. Away
+// mode stays a local decline: its daemon owns supervision. X-mode homes arm
+// before their relay poll is registered in the state directory.
+function shouldArm(paths) {
   if (existsSync(`${paths.state}/.afk`)) return false;
-  const result = await runProcess(
+  if (existsSync(`${paths.config}/x-mode.env`)) return true;
+  return supervisionNeeded(paths);
+}
+
+// fm_supervision_needed <state-dir> exits 0 exactly when the shared predicate
+// says the home needs supervision; exit 0 means arm here.
+function supervisionNeeded(paths) {
+  const result = spawnSync(
     "bash",
     [
       "-c",
-      'source "$1/bin/fm-supervision-lib.sh" && fm_supervision_needed "$2"',
-      "fm-opencode-supervision",
+      '. "$1/bin/fm-supervision-lib.sh" && fm_supervision_needed "$2"',
+      "fm-primary-watch-arm",
       paths.root,
       paths.state,
     ],
+    { stdio: "ignore" },
   );
-  return result.code === 0;
+  return result.status === 0;
 }
 
 async function sessionOwnsLock(paths) {
@@ -520,7 +533,7 @@ async function beginArm(paths, sessionID, client, predecessorArmPid) {
   if (!(await sessionOwnsLock(paths))) return { status: "read-only", armChild: null };
   if (child) return { status: "existing", armChild: child };
   if (retryTimer) return { status: "retrying", armChild: null };
-  if (!(await shouldArm(paths))) return { status: "not-needed", armChild: null };
+  if (!shouldArm(paths)) return { status: "not-needed", armChild: null };
   return { status: "spawned", armChild: spawnArm(paths, sessionID, client, predecessorArmPid) };
 }
 
